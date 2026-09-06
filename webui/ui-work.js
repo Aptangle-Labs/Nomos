@@ -248,6 +248,7 @@ Views.ticketDetail = async function (n) {
   AC.on("ticket_updated", (pl) => { if ((pl.ticket && pl.ticket.number) === n) refresh(); }, "tdetail");
   AC.on("ticket_comment", (pl) => { if (pl.ticket_number === n) loadComments(); }, "tdetail-c");
   AC.on("evidence_updated", (pl) => { if (pl.ticket_number === n) refresh(); }, "tdetail-e");
+  AC.on("policy_updated", (pl) => { if (pl.ticket_number === n) refresh(); }, "tdetail-pol");
   AC.on("completion_requested", (pl) => { if (pl.ticket_number === n) refresh(); }, "tdetail-p");
   AC.on("completion_reviewed", (pl) => { if (pl.ticket_number === n) refresh(); }, "tdetail-r");
 };

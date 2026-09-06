@@ -210,8 +210,13 @@ def list_evidence(
     data["proposals"] = [
         dict(p)
         | {
-            "stale": p["ticket_revision"] != row["revision"]
-            or p["observation_id"] != latest_observation(conn, project_id, policy.get("workspace_id"))
+            # Staleness only means something while a proposal awaits review;
+            # a reviewed proposal is a historical record, not an open offer.
+            "stale": p["state"] == "pending"
+            and (
+                p["ticket_revision"] != row["revision"]
+                or p["observation_id"] != latest_observation(conn, project_id, policy.get("workspace_id"))
+            )
         }
         for p in conn.execute(
             "SELECT * FROM completion_proposals WHERE ticket_id=? ORDER BY id DESC LIMIT 20", (row["id"],)
@@ -259,7 +264,7 @@ async def set_policy(
         conn.execute(
             "UPDATE tickets SET updated_at=?,changed_by=? WHERE id=?", (utc_now(), actor.alias, row["id"])
         )
-        event_record(conn, project_id, actor, "evidence_updated", {"id": row["id"], "ticket_number": number})
+        event_record(conn, project_id, actor, "policy_updated", {"id": row["id"], "ticket_number": number})
         return {"revision": ticket_row(conn, project_id, number)["revision"]}
 
     return await mutate(actor, project_id, f"policy:{number}", body.model_dump(), key, change)

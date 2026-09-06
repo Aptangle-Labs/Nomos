@@ -202,3 +202,112 @@ def test_handoff_offer_visible_through_watch_filter(client, project):
         client.get(f"/api/projects/{pid}/events?since_id=0&types={WATCH_TYPES}", headers=b["headers"])
     )["items"]
     assert any(e["type"] == "handoff_updated" for e in events)
+
+
+def test_handoff_accept_attaches_recipient_session(client, project):
+    """The acceptor can bind their registered session to the claim instead of
+    losing session linkage on transfer."""
+    pid = project["id"]
+    a, b = project["a"], project["b"]
+    t = new_ticket(client, pid, "session-linked transfer")
+    current = unwrap(
+        client.post(f"/api/projects/{pid}/tickets/{t['number']}/claim", json={"managed": True}, headers=a["headers"])
+    )
+    cp = unwrap(
+        client.post(
+            f"/api/projects/{pid}/checkpoints",
+            json={"purpose": "handoff", "next_action": "test", "ticket_number": t["number"], "shared": True},
+            headers=a["headers"],
+        ),
+        201,
+    )
+    offer = unwrap(
+        client.post(
+            f"/api/projects/{pid}/tickets/{t['number']}/handoffs",
+            json={
+                "expected_revision": current["revision"],
+                "claim_generation": current["claim_generation"],
+                "to_agent_id": b["id"],
+                "checkpoint_id": cp["id"],
+                "reason": "shift change",
+            },
+            headers=a["headers"],
+        ),
+        201,
+    )
+    sess = unwrap(client.post(f"/api/projects/{pid}/sessions", json={"runner": "test"}, headers=b["headers"]), 201)
+    foreign = unwrap(client.post(f"/api/projects/{pid}/sessions", json={"runner": "test"}, headers=a["headers"]), 201)
+    stolen = client.post(
+        f"/api/projects/{pid}/handoffs/{offer['id']}/accept",
+        json={"session_id": foreign["id"]},
+        headers=b["headers"],
+    )
+    assert stolen.status_code == 422
+    accepted = unwrap(
+        client.post(
+            f"/api/projects/{pid}/handoffs/{offer['id']}/accept",
+            json={"session_id": sess["id"]},
+            headers=b["headers"],
+        )
+    )["ticket"]
+    assert accepted["claim_session_id"] == sess["id"]
+    assert accepted["assignee"] == b["alias"]
+
+
+def test_bodiless_accept_replays_against_legacy_fingerprint(client, project):
+    """Accept without a body must hash the same {} fingerprint it did before
+    session support, so pre-upgrade idempotency records still replay."""
+    pid = project["id"]
+    a, b = project["a"], project["b"]
+    t = new_ticket(client, pid, "legacy replay transfer")
+    current = unwrap(
+        client.post(f"/api/projects/{pid}/tickets/{t['number']}/claim", json={"managed": True}, headers=a["headers"])
+    )
+    cp = unwrap(
+        client.post(
+            f"/api/projects/{pid}/checkpoints",
+            json={"purpose": "handoff", "next_action": "test", "ticket_number": t["number"], "shared": True},
+            headers=a["headers"],
+        ),
+        201,
+    )
+    offer = unwrap(
+        client.post(
+            f"/api/projects/{pid}/tickets/{t['number']}/handoffs",
+            json={
+                "expected_revision": current["revision"],
+                "claim_generation": current["claim_generation"],
+                "to_agent_id": b["id"],
+                "checkpoint_id": cp["id"],
+                "reason": "shift change",
+            },
+            headers=a["headers"],
+        ),
+        201,
+    )
+    # Seed the record a PRE-UPGRADE bodiless accept would have written: the
+    # operation key with the hash of {}. The current implementation must
+    # replay against it, proving the fingerprint never changed.
+    import hashlib
+    import json as jsonlib
+
+    from server.db import transaction, utc_now
+
+    legacy_hash = hashlib.sha256(
+        jsonlib.dumps({}, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    ).hexdigest()
+    with transaction() as conn:
+        conn.execute(
+            "INSERT INTO idempotency_requests VALUES (?,?,?,?,?,?,?)",
+            (pid, b["id"], f"accept:{offer['id']}", "accept-legacy", legacy_hash,
+             jsonlib.dumps({"seeded": True}), utc_now()),
+        )
+    url = f"/api/projects/{pid}/handoffs/{offer['id']}/accept"
+    key = {"Idempotency-Key": "accept-legacy"} | b["headers"]
+    replay = unwrap(client.post(url, headers=key))
+    assert replay["replayed"] and replay["seeded"] is True
+    sess = unwrap(client.post(f"/api/projects/{pid}/sessions", json={}, headers=b["headers"]), 201)
+    conflict = client.post(url, json={"session_id": sess["id"]}, headers=key)
+    assert conflict.status_code == 409
+    accepted = unwrap(client.post(url, headers=b["headers"]))["ticket"]
+    assert accepted["assignee"] == b["alias"]

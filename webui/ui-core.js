@@ -332,7 +332,7 @@ const AC = {
         "message_unpinned", "reaction", "typing", "ticket_created", "ticket_updated",
         "ticket_comment", "awaiting_human", "document_created", "document_updated",
         "agent_joined", "agent_updated", "agent_revoked", "agent_removed",
-        "channel_created", "dm_opened", "board_updated", "audit", "audit_anomaly", "inbox_requested", "inbox_updated", "checkpoint_created", "handoff_updated", "decision_requested", "decision_resolved", "evidence_updated", "completion_requested", "completion_reviewed", "workspace_updated", "reservation_updated", "reservation_conflict", "experiment_updated"];
+        "channel_created", "dm_opened", "board_updated", "audit", "audit_anomaly", "inbox_requested", "inbox_updated", "checkpoint_created", "handoff_updated", "decision_requested", "decision_resolved", "evidence_updated", "policy_updated", "completion_requested", "completion_reviewed", "workspace_updated", "reservation_updated", "reservation_conflict", "experiment_updated"];
       const TRANSIENT = new Set(["typing"]);
       for (const t of types) {
         es.addEventListener(t, (ev) => {

@@ -155,3 +155,28 @@ def test_stale_proposal_rejection_cannot_reopen_ticket(client, project):
     )
     assert plain["state"] == "rejected"
     assert unwrap(client.get(base))["status"] == "done"
+
+
+def test_reviewed_proposals_are_not_reported_stale(client, project):
+    """Staleness is an open-offer concept: an approved proposal must read as
+    the historical approval it is, even though the ticket moved on."""
+    pid = project["id"]
+    t, base, policy, ev, p = configure(client, pid)
+    unwrap(client.post(f"/api/projects/{pid}/completion-proposals/{p['id']}/review", json={"approve": True, "reason": "verified"}))
+    listing = unwrap(client.get(base + "/evidence"))
+    by_id = {row["id"]: row for row in listing["proposals"]}
+    assert by_id[p["id"]]["state"] == "approved"
+    assert by_id[p["id"]]["stale"] is False
+
+
+def test_policy_update_emits_policy_updated_event(client, project):
+    pid = project["id"]
+    t = new_ticket(client, pid, "policy event")
+    unwrap(
+        client.put(
+            f"/api/projects/{pid}/tickets/{t['number']}/completion-policy",
+            json={"expected_revision": 0, "human_review": True},
+        )
+    )
+    events = unwrap(client.get(f"/api/projects/{pid}/events?since_id=0&types=policy_updated"))["items"]
+    assert any(e["payload"].get("ticket_number") == t["number"] for e in events)

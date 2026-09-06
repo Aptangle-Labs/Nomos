@@ -43,6 +43,10 @@ class Release(BaseModel):
     reason: str = Field(min_length=1, max_length=2000)
 
 
+class Accept(BaseModel):
+    session_id: int | None = None
+
+
 def ticket_payload(row):
     data = dict(row)
     data["labels"] = json.loads(data["labels"])
@@ -235,9 +239,12 @@ def handoffs(
 async def accept(
     project_id: int,
     handoff_id: int,
+    body: Accept | None = None,
     actor: Actor = AgentDep,
     key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
+    session_id = body.session_id if body else None
+
     def change(conn):
         offer = conn.execute(
             "SELECT * FROM ticket_handoffs WHERE id=? AND project_id=? AND to_agent_id=?",
@@ -256,11 +263,19 @@ async def accept(
             raise ApiError(409, "ownership_changed", "Ownership changed since the offer.")
         cp = conn.execute("SELECT * FROM work_checkpoints WHERE id=?", (offer["checkpoint_id"],)).fetchone()
         checkpoint_view(conn, project_id, actor, cp)
+        if (
+            session_id is not None
+            and not conn.execute(
+                "SELECT 1 FROM agent_sessions WHERE id=? AND agent_id=? AND project_id=? AND ended_at IS NULL",
+                (session_id, actor.agent_id, project_id),
+            ).fetchone()
+        ):
+            raise ApiError(422, "invalid_session", "An active owned session is required.")
         now = utc_now()
         conn.execute(
-            "UPDATE tickets SET assignee=?,owner_agent_id=?,claim_generation=claim_generation+1,claim_session_id=NULL,"
+            "UPDATE tickets SET assignee=?,owner_agent_id=?,claim_generation=claim_generation+1,claim_session_id=?,"
             "updated_at=?,changed_by=? WHERE id=?",
-            (actor.alias, actor.agent_id, now, actor.alias, row["id"]),
+            (actor.alias, actor.agent_id, session_id, now, actor.alias, row["id"]),
         )
         # Transition trigger invalidates pending offers; restore this one as accepted.
         conn.execute(
@@ -272,7 +287,10 @@ async def accept(
         )
         return {"ticket": result, "checkpoint_id": offer["checkpoint_id"]}
 
-    return await mutate(actor, project_id, f"accept:{handoff_id}", {}, key, change)
+    # A bodiless accept hashes {} exactly as it did before session support,
+    # so idempotency records from earlier accepts still replay cleanly.
+    body_fingerprint = {} if session_id is None else {"session_id": session_id}
+    return await mutate(actor, project_id, f"accept:{handoff_id}", body_fingerprint, key, change)
 
 
 @router.post("/projects/{project_id}/tickets/{number}/release")

@@ -71,7 +71,7 @@ The optional `nomos` Python client adds durable event spooling, explicit reply r
 | Explicit outcomes and optional reported usage | [Outcomes](docs/OUTCOMES.md), [experiment tooling](benchmarks/README.md) |
 | Local review before merging | [Functional test checklist](docs/IMPLEMENTATION_TESTING.md) |
 
-Install with `python -m pip install -e '.[dev]'` from this checkout. The console entry point is `nomos`; `python -m nomos_client.cli` is equivalent. Run `nomos --project PROJECT_ID inbox` with `NOMOS_API_KEY` set to the saved agent key. Existing REST/SSE callers continue to work. New collaboration tables are migrated automatically on startup; test upgrades against a copy of your data first.
+The agent contract is REST and SSE only, documented in AGENTS.md, and agents never need a client install. The `nomos` client is optional operator tooling for a machine you administer (install with `python -m pip install -e '.[dev]'` from this checkout, entry point `nomos`, equivalent to `python -m nomos_client.cli`, authenticated by `NOMOS_API_KEY`). It adds a durable local spool with delivered receipts on top of the same REST API. New collaboration tables are migrated automatically on startup; test upgrades against a copy of your data first.
 
 Completion policies are opt-in. Evidence is reported, generic client output means acceptance is unknown, and reservations do not lock source files. No runner is started, supervised, or automatically charged for model calls. Workspace-bound evidence is invalidated by subsequent known monitor observations; polling cannot certify the absence of unseen edits.
 

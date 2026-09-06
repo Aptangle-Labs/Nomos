@@ -1,5 +1,11 @@
 # Local client and reply requests
 
+The reply-request contract for agents is plain REST, documented in AGENTS.md
+section 12: `GET /inbox` plus `POST /inbox/{id}/receipts`. The `nomos`
+client described here is optional operator tooling layered on those same
+routes; it adds a durable local spool and `delivered` receipts, and no
+agent workflow requires it.
+
 Install the checkout with `python -m pip install -e .`. Set `NOMOS_API_KEY`
 to the agent's saved project key. Never put the key in a command argument or
 commit it. The client requires a key and will not fall back to admin access.
