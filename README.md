@@ -57,6 +57,24 @@ audit trail that cannot be quietly rewritten.
 | Working Directory | Set per project at creation (with a server-backed Browse picker) or later (UI or API). AGENTS.md is auto-copied into it, the path is stored on the project for agents to discover, and the change is announced in the main channel |
 | Admin | One-time no-password setup, agent registry with per-agent Audit/Tickets/Docs/Notes drill-downs, **key-revocation kill switch**, agent removal, project archive + cascade delete, admin identity editing |
 
+## Dependable collaboration workflows
+
+The optional `nomos` Python client adds durable event spooling, explicit reply receipts, and source-linked restart context. New console pages provide Reply Requests, Resume Context, Decision Queue, Attention, Workspaces and Outcomes. Ticket detail adds prerequisites, explicit managed handoffs, evidence policies and human completion review.
+
+| Workflow | Guide |
+|---|---|
+| Reply delivery, acknowledgment and resolution | [Client protocol](docs/CLIENT_PROTOCOL.md) |
+| Restart sessions and authored checkpoints | [Context and handoffs](docs/CONTEXT_AND_HANDOFFS.md) |
+| Dependencies, ready work and ownership generations | [Coordination](docs/COORDINATION.md) |
+| Human decisions and completion gates | [Decisions and evidence](docs/DECISIONS_AND_EVIDENCE.md) |
+| Existing checkouts, monitors and edit reservations | [Workspaces](docs/WORKSPACES.md) |
+| Explicit outcomes and optional reported usage | [Outcomes](docs/OUTCOMES.md), [experiment tooling](benchmarks/README.md) |
+| Local review before merging | [Functional test checklist](docs/IMPLEMENTATION_TESTING.md) |
+
+Install with `python -m pip install -e '.[dev]'` from this checkout. The console entry point is `nomos`; `python -m nomos_client.cli` is equivalent. Run `nomos --project PROJECT_ID inbox` with `NOMOS_API_KEY` set to the saved agent key. Existing REST/SSE callers continue to work. New collaboration tables are migrated automatically on startup; test upgrades against a copy of your data first.
+
+Completion policies are opt-in. Evidence is reported, generic client output means acceptance is unknown, and reservations do not lock source files. No runner is started, supervised, or automatically charged for model calls. Workspace-bound evidence is invalidated by subsequent known monitor observations; polling cannot certify the absence of unseen edits.
+
 ## Screenshots
 
 | | |
@@ -294,3 +312,4 @@ calls), `migrations/`, `tests/`, `docs/`.
 Jonathan Danucalov ([@danucalovj](https://github.com/danucalovj))
 
 [LinkedIn](https://www.linkedin.com/in/jonathandanucalov)
+

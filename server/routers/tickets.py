@@ -6,7 +6,7 @@ import json
 import sqlite3
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Header, Request
 from pydantic import BaseModel, Field
 
 from .. import audit
@@ -14,6 +14,7 @@ from ..auth import ADMIN_AGENT_ID, Actor, AdminDep, AgentDep, check_project_acce
 from ..db import query_all, query_one, transaction, utc_now
 from ..errors import ApiError, ok
 from ..events import append_event, notify
+from ..operations import mutate, project_guard, revision_guard
 from ..services import (
     MENTION_RE,
     get_project,
@@ -25,6 +26,7 @@ from ..services import (
     require_not_archived,
     resolve_alias,
 )
+from ..work import blockers, require_ready, validate_update
 
 router = APIRouter(tags=["tickets"])
 
@@ -40,6 +42,8 @@ class TicketCreate(BaseModel):
 
 
 class TicketUpdate(BaseModel):
+    expected_revision: int | None = Field(default=None, ge=0)
+    claim_generation: int | None = Field(default=None, ge=0)
     title: str | None = Field(default=None, min_length=1, max_length=300)
     description: str | None = Field(default=None, max_length=20000)
     priority: str | None = None
@@ -49,6 +53,7 @@ class TicketUpdate(BaseModel):
 
 
 class CommentCreate(BaseModel):
+    requires_ack: bool = False
     body: str = Field(min_length=1, max_length=20000)
     parent_id: int | None = None
     attachment_ids: list[int] = Field(default_factory=list)
@@ -61,6 +66,10 @@ def serialize_ticket(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "number": row["number"],
+        "revision": row["revision"],
+        "managed_claim": bool(row["managed_claim"]),
+        "claim_generation": row["claim_generation"],
+        "owner_agent_id": row["owner_agent_id"],
         "title": row["title"],
         "description": row["description"],
         "status": row["status"],
@@ -171,12 +180,14 @@ async def update_ticket_fields(
 
     now = utc_now()
     with transaction() as conn:
+        project_guard(conn, actor, project_id)
         row = conn.execute(
             "SELECT * FROM tickets WHERE project_id = ? AND number = ?", (project_id, number)
         ).fetchone()
         if row is None:
             raise ApiError(404, "not_found", f"Ticket #{number} not found in project {project_id}.")
 
+        validate_update(conn, row, actor, fields, fields_set)
         changes: dict[str, Any] = {}
         sets: list[str] = []
         params: list[Any] = []
@@ -210,6 +221,12 @@ async def update_ticket_fields(
 
         if changes:
             apply("updated_at", now)
+            apply("changed_by", actor.alias)
+            if changes.get("assignee") and row["managed_claim"]:
+                apply("managed_claim", 0)
+                apply("owner_agent_id", None)
+                apply("claim_generation", row["claim_generation"] + 1)
+                apply("claim_session_id", None)
             params.extend([project_id, number])
             conn.execute(
                 f"UPDATE tickets SET {', '.join(sets)} WHERE project_id = ? AND number = ?",
@@ -288,6 +305,10 @@ def serialize_ticket_row_in_txn(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": row["id"],
         "number": row["number"],
+        "revision": row["revision"],
+        "managed_claim": bool(row["managed_claim"]),
+        "claim_generation": row["claim_generation"],
+        "owner_agent_id": row["owner_agent_id"],
         "title": row["title"],
         "description": row["description"],
         "status": row["status"],
@@ -300,43 +321,30 @@ def serialize_ticket_row_in_txn(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _create_ticket_batch(conn, project_id, actor, items):
+    now = utc_now()
+    results = []
+    for item in items:
+        _validate_priority(item.priority)
+        labels = _validate_labels(item.labels)
+        assignee = _validate_assignee(project_id, item.assignee)
+        allocated = conn.execute("UPDATE projects SET next_ticket_number=next_ticket_number+1 WHERE id=? RETURNING next_ticket_number", (project_id,)).fetchone()
+        number = allocated[0]-1
+        cur = conn.execute("INSERT INTO tickets(project_id,number,title,description,status,priority,labels,assignee,reporter,created_at,updated_at) VALUES(?,?,?,?,'open',?,?,?,?,?,?)", (project_id,number,item.title,item.description,item.priority,labels,assignee,actor.alias,now,now))
+        row = conn.execute('SELECT * FROM tickets WHERE id=?', (cur.lastrowid,)).fetchone()
+        payload = serialize_ticket_row_in_txn(row) | {'comment_count': 0}
+        results.append(payload)
+        append_event(conn, project_id, 'ticket_created', {'ticket': payload, 'by': actor.alias})
+        _emit_assigned_at_creation(conn, project_id, row, actor.alias)
+    numbers = ', '.join('#'+str(t['number']) for t in results)
+    post_system_message(project_id, f"Tickets created: {numbers} (by {actor.alias})", _conn=conn)
+    return results
+
+
 @router.post("/projects/{project_id}/tickets", status_code=201)
 async def create_ticket(project_id: int, body: TicketCreate, request: Request) -> dict:
-    actor: Actor = await get_actor(request)
-    check_project_access(actor, project_id)
-    project = get_project(project_id)
-    require_not_archived(project)
-    _validate_priority(body.priority)
-    labels = _validate_labels(body.labels)
-    assignee = _validate_assignee(project_id, body.assignee)
-    now = utc_now()
-    with transaction() as conn:
-        allocated = conn.execute(
-            "UPDATE projects SET next_ticket_number = next_ticket_number + 1 "
-            "WHERE id = ? RETURNING next_ticket_number",
-            (project_id,),
-        ).fetchone()
-        number = int(allocated[0]) - 1
-        cur = conn.execute(
-            "INSERT INTO tickets (project_id, number, title, description, status, priority, "
-            "labels, assignee, reporter, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)",
-            (project_id, number, body.title, body.description, body.priority,
-             labels, assignee, actor.alias, now, now),
-        )
-        ticket_id = int(cur.lastrowid or 0)
-        row = conn.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,)).fetchone()
-        append_event(
-            conn, project_id, "ticket_created",
-            {"ticket": serialize_ticket_row_in_txn(row), "by": actor.alias},
-        )
-        # Assignment at creation must reach the assignee's targeted feed the
-        # same way a later reassignment does (issue #28): an agent filtering
-        # types=ticket_assigned otherwise never hears about it.
-        _emit_assigned_at_creation(conn, project_id, row, actor.alias)
-    post_system_message(project_id, f"Ticket #{number} created: {body.title} (by {actor.alias})")
-    await notify(project_id)
-    return ok(serialize_ticket(get_ticket_row(project_id, number)))
+    actor = await get_actor(request)
+    return await mutate(actor, project_id, 'ticket-create', body.model_dump(), request.headers.get('Idempotency-Key'), lambda conn: _create_ticket_batch(conn, project_id, actor, [body])[0])
 
 
 @router.get("/projects/{project_id}/tickets")
@@ -348,6 +356,7 @@ async def list_tickets(
     reporter: str | None = None,
     priority: str | None = None,
     label: str | None = None,
+    ready: bool = False,
     q: str | None = None,
     before_id: int | None = None,
     limit: int | None = None,
@@ -358,6 +367,8 @@ async def list_tickets(
     window = pagination_window(limit)
     clauses = ["project_id = ?"]
     params: list[Any] = [project_id]
+    if ready:
+        clauses.extend(["status='open'", "assignee IS NULL", "NOT EXISTS (SELECT 1 FROM ticket_dependencies d JOIN tickets p ON p.project_id=d.project_id AND p.number=d.prerequisite_number WHERE d.project_id=tickets.project_id AND d.ticket_number=tickets.number AND d.waived=0 AND p.status!='done')"])
     if status is not None:
         clauses.append("status = ?")
         params.append(status)
@@ -396,6 +407,8 @@ async def get_ticket(project_id: int, number: int, request: Request) -> dict:
     check_project_access(actor, project_id)
     row = get_ticket_row(project_id, number)
     data = serialize_ticket(row)
+    from ..db import get_conn
+    data["blockers"] = blockers(get_conn(), project_id, number)
     # Message-sourced backlinks are limited to conversations the caller may
     # see, so a ticket referenced inside a DM never leaks the DM's content.
     visibility = ""
@@ -447,24 +460,42 @@ async def patch_ticket(
     return ok(data)
 
 
+class ClaimRequest(BaseModel):
+    managed: bool = False
+    expected_revision: int | None = Field(default=None, ge=0)
+    session_id: int | None = None
+
+
 @router.post("/projects/{project_id}/tickets/{number}/claim")
-async def claim_ticket(project_id: int, number: int, agent: Actor = AgentDep) -> dict:
+async def claim_ticket(project_id: int, number: int, body: ClaimRequest | None = None, agent: Actor = AgentDep, key: str | None = Header(default=None, alias="Idempotency-Key")) -> dict:
     """Atomic claim: exactly one winner under concurrency; losers get 409."""
     check_project_access(agent, project_id)
     project = get_project(project_id)
     require_not_archived(project)
+    if body is not None and body.managed:
+        from ..operations import mutate, ticket_row
+        from .work import claim
+        def managed_change(conn):
+            row = ticket_row(conn, project_id, number)
+            revision_guard(row, body.expected_revision)
+            return claim(conn, project_id, agent, row, body.session_id)
+        return await mutate(agent, project_id, f'claim:{number}', body.model_dump(), key, managed_change)
     now = utc_now()
     with transaction() as conn:
+        current = conn.execute('SELECT * FROM tickets WHERE project_id=? AND number=?',(project_id,number)).fetchone()
+        if current is not None:
+            require_ready(conn, current)
+            revision_guard(current, body.expected_revision if body else None)
         before = conn.execute(
             "SELECT status FROM tickets WHERE project_id = ? AND number = ?",
             (project_id, number),
         ).fetchone()
         cur = conn.execute(
-            "UPDATE tickets SET assignee = ?, "
+            "UPDATE tickets SET assignee = ?, changed_by = ?, "
             "status = CASE WHEN status = 'open' THEN 'in-progress' ELSE status END, "
             "updated_at = ? "
             "WHERE project_id = ? AND number = ? AND assignee IS NULL",
-            (agent.alias, now, project_id, number),
+            (agent.alias, agent.alias, now, project_id, number),
         )
         if cur.rowcount == 0:
             existing = conn.execute(
@@ -506,6 +537,8 @@ async def claim_ticket(project_id: int, number: int, agent: Actor = AgentDep) ->
 async def delete_ticket(project_id: int, number: int, _admin: Actor = AdminDep) -> dict:
     row = get_ticket_row(project_id, number)
     with transaction() as conn:
+        if conn.execute('SELECT 1 FROM ticket_dependencies WHERE project_id=? AND prerequisite_number=?',(project_id,number)).fetchone():
+            raise ApiError(409, 'dependency_in_use', 'Remove or redirect incoming dependencies before deleting this ticket.')
         conn.execute("DELETE FROM tickets WHERE id = ?", (row["id"],))
         append_event(conn, project_id, "ticket_deleted", {"number": number})
     await notify(project_id)
@@ -557,6 +590,11 @@ async def create_comment(
 
         targets = _mention_targets(project_id, body.body)
         targets.discard(actor.agent_id)
+        if body.requires_ack:
+            if '@here' in body.body.lower():
+                raise ApiError(422, 'explicit_targets_required', 'Use explicit agent mentions for Request Reply.')
+            from ..inbox import create_requests
+            create_requests(conn, project_id, actor, comment_id, targets, comment=True)
         row = conn.execute(
             "SELECT * FROM ticket_comments WHERE id = ?", (comment_id,)
         ).fetchone()
@@ -619,50 +657,5 @@ class TicketBulkCreate(BaseModel):
 
 @router.post("/projects/{project_id}/tickets/bulk", status_code=201)
 async def create_tickets_bulk(project_id: int, body: TicketBulkCreate, request: Request) -> dict:
-    """Create up to 50 tickets in one atomic call — leads seeding a sprint
-    make one request instead of N (issue #15 S10). All-or-nothing: any
-    validation failure creates no tickets."""
-    actor: Actor = await get_actor(request)
-    check_project_access(actor, project_id)
-    project = get_project(project_id)
-    require_not_archived(project)
-    validated = []
-    for item in body.tickets:
-        _validate_priority(item.priority)
-        validated.append(
-            (item, _validate_labels(item.labels), _validate_assignee(project_id, item.assignee))
-        )
-    now = utc_now()
-    numbers: list[int] = []
-    with transaction() as conn:
-        for item, labels, assignee in validated:
-            allocated = conn.execute(
-                "UPDATE projects SET next_ticket_number = next_ticket_number + 1 "
-                "WHERE id = ? RETURNING next_ticket_number",
-                (project_id,),
-            ).fetchone()
-            number = int(allocated[0]) - 1
-            conn.execute(
-                "INSERT INTO tickets (project_id, number, title, description, status, priority, "
-                "labels, assignee, reporter, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)",
-                (project_id, number, item.title, item.description, item.priority,
-                 labels, assignee, actor.alias, now, now),
-            )
-            row = conn.execute(
-                "SELECT * FROM tickets WHERE project_id = ? AND number = ?",
-                (project_id, number),
-            ).fetchone()
-            append_event(
-                conn, project_id, "ticket_created",
-                {"ticket": serialize_ticket_row_in_txn(row), "by": actor.alias},
-            )
-            _emit_assigned_at_creation(conn, project_id, row, actor.alias)
-            numbers.append(number)
-    first, last = numbers[0], numbers[-1]
-    label = f"#{first}" if first == last else f"#{first}–#{last}"
-    post_system_message(project_id, f"{len(numbers)} tickets created ({label}) by {actor.alias}")
-    await notify(project_id)
-    return ok({
-        "items": [serialize_ticket(get_ticket_row(project_id, n)) for n in numbers],
-    })
+    actor = await get_actor(request)
+    return await mutate(actor, project_id, 'ticket-bulk', body.model_dump(), request.headers.get('Idempotency-Key'), lambda conn: {'items': _create_ticket_batch(conn, project_id, actor, body.tickets)})

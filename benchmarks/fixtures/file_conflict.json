@@ -1,0 +1,9 @@
+{
+  "revision": "1",
+  "instruction": "Have two agents reserve overlapping paths in one checkout, then the same relative path in a second checkout.",
+  "checks": {
+    "overlap_rejected": true,
+    "separate_checkout_allowed": true,
+    "source_files_preserved": true
+  }
+}

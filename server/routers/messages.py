@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import sqlite3
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from pydantic import BaseModel, Field
 
 from ..auth import Actor, ActorDep, check_project_access
@@ -37,6 +37,7 @@ LONG_POLL_MAX_SECONDS = 60.0
 
 
 class MessageCreate(BaseModel):
+    requires_ack: bool = False
     body: str = Field(default="", max_length=64_000)
     type: str = Field(default="normal", pattern="^(normal|decision)$")
     parent_id: int | None = None
@@ -82,7 +83,8 @@ def _is_author(actor: Actor, row: sqlite3.Row) -> bool:
 
 @router.post("/projects/{project_id}/conversations/{conversation_id}/messages", status_code=201)
 async def create_message(
-    project_id: int, conversation_id: int, body: MessageCreate, actor: Actor = ActorDep
+    project_id: int, conversation_id: int, body: MessageCreate, actor: Actor = ActorDep,
+    key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> dict:
     _writable_conversation(actor, project_id, conversation_id)
     if body.doc_slug is not None:
@@ -103,6 +105,7 @@ async def create_message(
         parent_id=body.parent_id,
         attachment_ids=body.attachment_ids,
         doc_ref=body.doc_slug,
+        requires_ack=body.requires_ack, request_key=key,
     )
     await notify(project_id)
     return ok(payload)
@@ -499,3 +502,4 @@ async def list_saved(
     )
     has_more = len(rows) > window
     return ok({"items": [serialize_message(r) for r in rows[:window]], "has_more": has_more})
+

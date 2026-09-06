@@ -195,6 +195,9 @@ Views.audit = async function () {
   const coverageRefresh = debounce(renderCoverage, 600);
 
   /* ---------- filter bar ---------- */
+  const workspaceData = await _req("GET", `/api/projects/${pid}/workspaces`);
+  const workspaceSel = el("select", {}, el("option", {value:""}, "Any Workspace"), workspaceData.items.map(w=>el("option", {value:w.id}, w.name)));
+  workspaceSel.onchange=()=>{filters.workspace_id=workspaceSel.value;reload();};
   const actorSel = el("select", {},
     el("option", { value: "" }, "Any Actor"),
     el("option", { value: AC.state.adminAlias || "admin" }, (AC.state.adminAlias || "admin") + " (admin)"),
@@ -219,6 +222,10 @@ Views.audit = async function () {
   const trailCard = el("div", { class: "card", style: "padding: 0" }, listEl);
 
   function passesFilters(rec) {
+    if (filters.workspace_id) {
+      let detail={}; try { detail=JSON.parse(rec.detail||"{}"); } catch (_) { /* old empty detail */ }
+      if(String(detail.workspace_id)!==filters.workspace_id)return false;
+    }
     if (filters.actor && rec.actor !== filters.actor) return false;
     if (filters.action && rec.action !== filters.action) return false;
     if (filters.source && rec.source !== filters.source) return false;
@@ -283,6 +290,7 @@ Views.audit = async function () {
 
   function queryString(beforeId) {
     const p = new URLSearchParams();
+    if (filters.workspace_id) p.set("workspace_id",filters.workspace_id);
     if (filters.actor) p.set("actor", filters.actor);
     if (filters.action) p.set("action", filters.action);
     if (filters.source) p.set("source", filters.source);
@@ -350,7 +358,7 @@ Views.audit = async function () {
       el("div", { class: "a-header-actions" }, verifyResult, verifyBtn, exportBtn("jsonl"), exportBtn("csv"))),
     watchCard,
     coverageStrip,
-    el("div", { class: "filter-bar" }, actorSel, actionSel, sourceSel, targetInput),
+    el("div", { class: "filter-bar" }, workspaceSel, actorSel, actionSel, sourceSel, targetInput),
     trailCard,
     moreBtn);
   AC.setView(page);
@@ -375,3 +383,4 @@ Views.audit = async function () {
   }, "audit-live");
   AC.on("audit_anomaly", () => coverageRefresh(), "audit-anom");
 };
+

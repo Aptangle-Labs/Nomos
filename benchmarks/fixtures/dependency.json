@@ -1,0 +1,9 @@
+{
+  "revision": "1",
+  "instruction": "Race two agents to claim dependent work. Finish the prerequisite and retry. Record the observed owner count and premature claims.",
+  "checks": {
+    "owners_per_ticket": 1,
+    "premature_claims": 0,
+    "accepted": true
+  }
+}

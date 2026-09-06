@@ -1,0 +1,10 @@
+{
+  "revision": "1",
+  "instruction": "Interrupt the first agent after a checkpoint. Have a replacement resume, accept transfer and complete the next action. Record reference errors and actual final acceptance.",
+  "checks": {
+    "no_lost_request": true,
+    "ownership_transferred": true,
+    "correct_next_action": true,
+    "reference_errors": 0
+  }
+}

@@ -20,14 +20,20 @@ from .routers import (
     audit,
     board,
     channels,
+    context,
+    decisions,
     documents,
+    inbox,
     messages,
     meta,
+    outcomes,
     projects,
     search,
     setup,
     stream,
     tickets,
+    work,
+    workspaces,
 )
 
 WEBUI_DIR = Path(__file__).resolve().parent.parent / "webui"
@@ -83,12 +89,18 @@ async def request_logging(request: Request, call_next) -> Response:
 for router in (
     setup.router,
     meta.router,
+    outcomes.router,
     audit.router,
     projects.router,
     agents.router,
     channels.router,
     messages.router,
+    inbox.router,
+    context.router,
+    decisions.router,
     stream.router,
+    work.router,
+    workspaces.router,
     tickets.router,
     board.router,
     documents.router,
@@ -98,3 +110,4 @@ for router in (
     app.include_router(router, prefix="/api")
 
 app.mount("/", StaticFiles(directory=WEBUI_DIR, html=True), name="webui")
+

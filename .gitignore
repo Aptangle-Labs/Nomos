@@ -17,3 +17,6 @@ TODO.local.md
 
 # OS
 .DS_Store
+
+# Build metadata from the editable install
+*.egg-info/

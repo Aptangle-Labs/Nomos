@@ -117,8 +117,8 @@ const API = {
   // --- board ---
   board: (pid) => _req("GET", `/api/projects/${pid}/board`),
   setBoardColumns: (pid, columns) => _req("PUT", `/api/projects/${pid}/board/columns`, { columns }),
-  moveCard: (pid, ticketNumber, columnId) =>
-    _req("POST", `/api/projects/${pid}/board/move`, { ticket_number: ticketNumber, column_id: columnId }),
+  moveCard: (pid, ticketNumber, columnId, expectedRevision) =>
+    _req("POST", `/api/projects/${pid}/board/move`, { ticket_number: ticketNumber, column_id: columnId, expected_revision: expectedRevision }),
 
   // --- documents ---
   documents: (pid, params) => _req("GET", `/api/projects/${pid}/documents` + _qs(params)),
@@ -162,3 +162,4 @@ function _qs(params) {
   }
   return pairs.length ? "?" + pairs.join("&") : "";
 }
+

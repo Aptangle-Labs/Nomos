@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -403,6 +404,9 @@ def post_message(
     attachment_ids: list[int] | None = None,
     forwarded_from_id: int | None = None,
     doc_ref: str | None = None,
+    requires_ack: bool = False,
+    request_key: str | None = None,
+    _conn=None,
 ) -> dict[str, Any]:
     """Insert a message with mentions, ticket cross-links, attachment binding
     and events, in one transaction. Caller must have checked access (including
@@ -413,7 +417,18 @@ def post_message(
     if msg_type not in ("normal", "decision", "system"):
         raise ApiError(422, "invalid_type", "Message type must be 'normal' or 'decision'.")
     now = utc_now()
-    with transaction() as conn:
+    from .operations import project_guard, replay, save_replay
+    actor = Actor('agent' if author_type == 'agent' else 'admin', author_agent_id or 0,
+                  project_id if author_type == 'agent' else None, author_alias)
+    request_body = dict(body=body, type=msg_type, parent_id=parent_id, attachment_ids=attachment_ids,
+                        forwarded_from_id=forwarded_from_id, doc_ref=doc_ref, requires_ack=requires_ack)
+    with (transaction() if _conn is None else nullcontext(_conn)) as conn:
+        project_guard(conn, actor, project_id)
+        if author_type == 'agent' and not conn.execute('SELECT 1 FROM conversation_members WHERE conversation_id=? AND agent_id=?', (conversation_id, author_agent_id)).fetchone():
+            raise ApiError(403, 'forbidden', 'You are not a member of this conversation.')
+        replay_state = replay(conn, project_id, actor.agent_id, f'message:{conversation_id}', request_key, request_body)
+        if replay_state is not None and 'cached' in replay_state:
+            return replay_state['cached'] | {'replayed': True}
         if forwarded_from_id is not None:
             # Atomic re-check: the caller validated before the write lock, but
             # a concurrent delete may have landed since.
@@ -474,6 +489,11 @@ def post_message(
                 (project_id, message_id, target, now),
             )
 
+        if requires_ack:
+            if '@here' in body.lower():
+                raise ApiError(422, 'explicit_targets_required', 'Request Reply requires explicit agent mentions, not @here.')
+            from .inbox import create_requests
+            create_requests(conn, project_id, actor, message_id, targets, conversation=conversation_id)
         row = conn.execute("SELECT * FROM messages WHERE id = ?", (message_id,)).fetchone()
         payload = serialize_message(row)
         append_event(conn, project_id, "message", payload, conversation_id=conversation_id)
@@ -484,10 +504,11 @@ def post_message(
                  "by": author_alias, "excerpt": body[:200]},
                 target_agent_id=target,
             )
+        save_replay(conn, project_id, actor.agent_id, f'message:{conversation_id}', request_key, replay_state, payload)
     return payload
 
 
-def post_system_message(project_id: int, body: str) -> dict[str, Any] | None:
+def post_system_message(project_id: int, body: str, _conn=None) -> dict[str, Any] | None:
     """Post a system message to the project's main channel (if enabled in
     project settings). Caller must `await events.notify(project_id)` after."""
     project = get_project(project_id)
@@ -495,7 +516,7 @@ def post_system_message(project_id: int, body: str) -> dict[str, Any] | None:
         return None
     main = get_main_channel(project_id)
     return post_message(
-        project_id, main["id"], "system", None, "system", body, msg_type="system"
+        project_id, main["id"], "system", None, "system", body, msg_type="system", _conn=_conn
     )
 
 
@@ -564,3 +585,4 @@ def update_documents_fts(conn: sqlite3.Connection, document_id: int, title: str,
         "INSERT INTO documents_fts (rowid, title, body) VALUES (?, ?, ?)",
         (document_id, title, body),
     )
+

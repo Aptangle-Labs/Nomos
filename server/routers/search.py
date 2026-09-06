@@ -324,6 +324,9 @@ async def metrics(project_id: int, request: Request) -> dict:
         "messages_per_agent": messages_per_agent,
         "tickets_opened_by_day": opened,
         "tickets_closed_by_day": closed,
+        "tickets_closed_by_day_is_approximate": True,
+        "observed_completions_by_day": {r['day']: r['n'] for r in query_all("SELECT substr(created_at,1,10) AS day,COUNT(*) AS n FROM ticket_transitions WHERE project_id=? AND to_status='done' AND from_status!='done' GROUP BY day", (project_id,))},
+        "outcomes_url": f"/api/projects/{project_id}/outcomes",
         "active_agents": [serialize_agent(r) for r in active],
         "totals": dict(totals_row) if totals_row else {},
     })
@@ -344,7 +347,17 @@ def _safe_name(value: str) -> str:
 
 
 @router.post("/projects/{project_id}/export")
-async def export_project(project_id: int, _admin: Actor = AdminDep) -> FileResponse:
+def export_project(project_id: int, _admin: Actor = AdminDep) -> FileResponse:
+    from ..db import get_conn
+    conn = get_conn()
+    conn.execute('BEGIN')
+    try:
+        return _export_project_snapshot(project_id)
+    finally:
+        conn.rollback()
+
+
+def _export_project_snapshot(project_id: int) -> FileResponse:
     """Build a downloadable tarball of the whole project: conversations with
     messages/threads, tickets with comments, documents (current + revisions),
     decisions, agents, and attachment files. The tarball also stays on disk
@@ -378,6 +391,9 @@ async def export_project(project_id: int, _admin: Actor = AdminDep) -> FileRespo
                 "description": project["description"], "created_at": project["created_at"],
             },
             "generated_at": utc_now(),
+            "format_version": 2,
+            "attachment_consistency": "best_effort_filesystem_copy",
+            "missing_attachments": [a["id"] for a in attachments if not (settings.attachments_dir / str(project_id) / a["stored_name"]).is_file()],
             "counts": {
                 "conversations": len(conversations), "agents": len(agents),
                 "tickets": len(tickets), "documents": len(documents),
@@ -385,6 +401,14 @@ async def export_project(project_id: int, _admin: Actor = AdminDep) -> FileRespo
             },
         })
         _tar_add_json(tar, "agents.json", [serialize_agent(a) for a in agents])
+        _tar_add_json(tar, "working_notes.json", [
+            {"agent_id": a["id"], "alias": a["alias"], "body": a["scratchpad"],
+             "revision": a["scratchpad_revision"], "updated_at": a["scratchpad_updated_at"]} for a in agents
+        ])
+        for table in ("agent_todos", "agent_sessions", "work_checkpoints", "inbox_requests", "inbox_receipts", "ticket_handoffs", "ticket_transitions", "decision_requests", "completion_policies", "work_evidence", "completion_proposals", "workspaces", "path_reservations", "experiment_runs", "usage_samples", "resume_events", "reservation_conflicts"):
+            _tar_add_json(tar, table + ".json", [dict(r) for r in query_all(
+                f"SELECT * FROM {table} WHERE project_id=? ORDER BY {'ticket_id' if table == 'completion_policies' else 'id'}", (project_id,))])
+        _tar_add_json(tar, "ticket_dependencies.json", [dict(r) for r in query_all("SELECT * FROM ticket_dependencies WHERE project_id=?", (project_id,))])
         _tar_add_json(tar, "decisions.json", [serialize_message(m) for m in decisions])
         # Audit trail with chain fields — re-verifiable offline (issue #17).
         audit_rows = query_all(
@@ -439,3 +463,4 @@ async def export_project(project_id: int, _admin: Actor = AdminDep) -> FileRespo
         filename=filename,
         headers={"X-Export-Path": str(tar_path)},
     )
+

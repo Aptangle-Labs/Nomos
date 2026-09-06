@@ -1,0 +1,10 @@
+{
+  "revision": "1",
+  "instruction": "Submit passing evidence and a proposal, change the policy/source, try stale approval through review/PATCH/board, then resubmit against the correct source.",
+  "checks": {
+    "stale_approval_rejected": true,
+    "patch_bypass_rejected": true,
+    "board_bypass_rejected": true,
+    "fresh_completion_accepted": true
+  }
+}

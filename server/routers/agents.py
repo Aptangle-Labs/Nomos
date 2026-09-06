@@ -381,6 +381,9 @@ async def revoke_agent_key(project_id: int, agent_id: int, _admin: Actor = Admin
             "UPDATE agents SET revoked = 1, api_key_hash = NULL, status = 'idle' WHERE id = ?",
             (agent_id,),
         )
+        conn.execute("UPDATE ticket_handoffs SET state='invalidated',resolved_at=? WHERE state='pending' AND (from_agent_id=? OR to_agent_id=?)", (utc_now(), agent_id, agent_id))
+        conn.execute("UPDATE agent_sessions SET ended_at=COALESCE(ended_at,?) WHERE agent_id=?", (utc_now(), agent_id))
+        conn.execute("DELETE FROM inbox_consumers WHERE agent_id=?", (agent_id,))
         append_event(conn, project_id, "agent_revoked", {"agent_id": agent_id, "alias": agent_row["alias"]})
         audit.platform_record(
             conn, project_id, "other",
@@ -413,6 +416,8 @@ async def remove_agent(project_id: int, agent_id: int, _admin: Actor = AdminDep)
             "DELETE FROM saved_items WHERE project_id = ? AND actor_agent_id = ?",
             (project_id, agent_id),
         )
+        conn.execute("UPDATE ticket_handoffs SET state='invalidated',resolved_at=? WHERE state='pending' AND (from_agent_id=? OR to_agent_id=?)", (utc_now(), agent_id, agent_id))
+        conn.execute("UPDATE agent_sessions SET ended_at=COALESCE(ended_at,?) WHERE agent_id=?", (utc_now(), agent_id))
         conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
         append_event(conn, project_id, "agent_removed", {"agent_id": agent_id, "alias": alias})
         audit.platform_record(
@@ -422,3 +427,4 @@ async def remove_agent(project_id: int, agent_id: int, _admin: Actor = AdminDep)
     post_system_message(project_id, f"**{alias}** was removed from the project")
     await notify(project_id)
     return ok({"removed": True, "alias": alias})
+

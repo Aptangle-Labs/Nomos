@@ -1253,3 +1253,10 @@ select { font-family: var(--font-mono); font-size: 12px; }
 
 .agent-actions { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
 .agent-actions .act-sep { width: 1px; height: 14px; background: var(--line); margin: 0 4px; flex: none; }
+
+
+/* Collaboration forms use the existing theme tokens. */
+.collab-field { display:flex; flex-direction:column; gap:6px; margin:12px 0; }
+.collab-field input,.collab-field textarea,.collab-field select { width:100%; }
+.collab-list { display:grid; gap:12px; margin:18px 0; }
+.collab-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }

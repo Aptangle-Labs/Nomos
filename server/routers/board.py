@@ -27,6 +27,8 @@ class BoardUpdate(BaseModel):
 
 
 class MoveRequest(BaseModel):
+    claim_generation: int | None = Field(default=None, ge=0)
+    expected_revision: int | None = Field(default=None, ge=0)
     ticket_number: int
     column_id: int
 
@@ -129,8 +131,9 @@ async def move_card(project_id: int, body: MoveRequest, request: Request) -> dic
         raise ApiError(404, "not_found", f"Ticket #{body.ticket_number} not found in this project.")
     if current["status"] in statuses:
         return ok({"ticket": serialize_ticket(current), "column_id": body.column_id})
-    update = TicketUpdate(status=statuses[0])
+    update = TicketUpdate(status=statuses[0], expected_revision=body.expected_revision, claim_generation=body.claim_generation)
     ticket = await update_ticket_fields(
         project_id, body.ticket_number, actor, update, {"status"}
     )
     return ok({"ticket": ticket, "column_id": body.column_id})
+

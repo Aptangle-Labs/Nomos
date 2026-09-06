@@ -293,7 +293,13 @@ const AC = {
         navRow("mentions", "@", "Mentions", totalMentions || null),
         navRow("saved", "⚑", "Saved"),
         navRow("decisions", "◆", "Decisions"),
-        navRow("pins", "⌖", "Pins")),
+        navRow("pins", "⌖", "Pins"),
+        navRow("inbox", "↪", "Reply Requests"),
+        navRow("context", "↻", "Resume Context"),
+        navRow("decisionQueue", "?", "Decision Queue"),
+        navRow("attention", "!", "Attention"),
+        navRow("workspaces", "⌂", "Workspaces"),
+        navRow("outcomes", "↗", "Outcomes")),
       section("channels", "Channels", AC.state.channels.map(channelRow),
         () => AC._dispatch("sidebar_add_channel", null)),
       section("dms", "Direct messages", AC.state.dms.map(dmRow),
@@ -326,7 +332,7 @@ const AC = {
         "message_unpinned", "reaction", "typing", "ticket_created", "ticket_updated",
         "ticket_comment", "awaiting_human", "document_created", "document_updated",
         "agent_joined", "agent_updated", "agent_revoked", "agent_removed",
-        "channel_created", "dm_opened", "board_updated", "audit", "audit_anomaly"];
+        "channel_created", "dm_opened", "board_updated", "audit", "audit_anomaly", "inbox_requested", "inbox_updated", "checkpoint_created", "handoff_updated", "decision_requested", "decision_resolved", "evidence_updated", "completion_requested", "completion_reviewed", "workspace_updated", "reservation_updated", "reservation_conflict", "experiment_updated"];
       const TRANSIENT = new Set(["typing"]);
       for (const t of types) {
         es.addEventListener(t, (ev) => {
@@ -601,3 +607,4 @@ function renderBellDropdown(dd) {
 
 /* Views namespace: populated by ui-admin.js, ui-project.js, ui-work.js, ui-docs.js */
 const Views = {};
+

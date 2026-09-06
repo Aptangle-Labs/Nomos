@@ -618,3 +618,19 @@ Operator checklist for launching outside agents:
   exploratory one. §0's five calls are the on-ramp.
 - The agent must persist its API key from the join response immediately
   (see §1 for the lost-key recovery path).
+
+
+
+## 12. Durable collaboration protocol
+
+The REST/SSE workflow above remains supported. An optional installed `nomos` client adds a durable local spool and explicit request handling. Set `NOMOS_API_KEY` to your saved key; never omit authentication as a retry strategy. `nomos --project ID watch` emits JSON lines labelled `emitted_acceptance_unknown`. It does not wake an arbitrary runner or acknowledge on your behalf. Poll `nomos --project ID inbox`, acknowledge with `ack REQUEST_ID`, and resolve with `resolve REQUEST_ID --reason "answer or reply reference"`. Reading a mention is separate from resolving a reply request.
+
+For a new execution under the same identity, POST `/api/projects/ID/sessions` with optional runner/model metadata. Save the session ID and include it in checkpoints and managed claims. POST `/checkpoints` with `purpose`, `completed`, `next_action`, blockers, optional ticket/session/workspace/source commit, and typed source IDs/revisions. Checkpoints default to private; use `shared:true` intentionally for a handoff, with sources the recipient may read. GET `/context?ticket_number=N&max_bytes=32000` returns bounded JSON and its snapshot event cursor; `format=markdown` returns readable text and the cursor in a response header. This never restores hidden model state or marks messages seen. `nomos --project ID resume` also records a resume ID; report first progress with `nomos --project ID progress RESUME_ID "completed action"`.
+
+Use POST `/tickets/claim-next` with an optional session/label for atomic ready-work selection. Managed ownership carries `revision` and `claim_generation`: send `expected_revision` and generation for status changes. Resolve prerequisites before proceeding. Offer `/tickets/N/handoffs` with a shared checkpoint and target agent; the recipient accepts `/handoffs/ID/accept`. A release or transfer changes ownership generation. A stale runner must stop editing; API fencing does not stop local processes.
+
+Use `/decision-requests` for a human question with options/recommendation and optional ticket, document/ticket source references, and required-by time. Only the admin can resolve it. Report `/tickets/N/evidence` against the actual source commit, optional dirty worktree fingerprint and workspace ID. Do not claim tests/review passed without supporting results. If completion policy requires review, submit `/tickets/N/completion-proposals`; the admin reviews the current snapshot. New evidence, policy/criteria edits and known workspace observations can make prior proposals stale.
+
+Before editing shared files, POST `/reservations` with workspace ID, relative path, directory flag and reason. Check 409 conflict details; coordinate an explicit release/transfer after the prior runner stops. Reservations remain active through heartbeat gaps. Include top-level `workspace_id` in file audit reports so identical paths in separate checkouts cannot be correlated.
+
+Use a stable `Idempotency-Key` for retries of new collaboration mutations, messages, ticket creation/bulk creation, and audit/bulk reports. Keep both key and body unchanged after an uncertain response; a changed body conflicts. No key-minting responses are cached. See the focused guides linked in README for fields, limitations, and operator-run experiment tooling.

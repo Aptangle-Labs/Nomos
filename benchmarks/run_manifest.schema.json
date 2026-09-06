@@ -1,0 +1,166 @@
+{
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "task": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Task",
+      "type": "string"
+    },
+    "fixture_revision": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Fixture Revision",
+      "type": "string"
+    },
+    "starting_commit": {
+      "maxLength": 64,
+      "minLength": 40,
+      "pattern": "^([a-fA-F0-9]{40}|[a-fA-F0-9]{64})$",
+      "title": "Starting Commit",
+      "type": "string"
+    },
+    "condition": {
+      "enum": [
+        "baseline",
+        "helper_context"
+      ],
+      "title": "Condition",
+      "type": "string"
+    },
+    "trial": {
+      "minimum": 1,
+      "title": "Trial",
+      "type": "integer"
+    },
+    "order_seed": {
+      "title": "Order Seed",
+      "type": "integer"
+    },
+    "agent_count": {
+      "maximum": 100,
+      "minimum": 1,
+      "title": "Agent Count",
+      "type": "integer"
+    },
+    "runner": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runner"
+    },
+    "runner_version": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Runner Version"
+    },
+    "model": {
+      "anyOf": [
+        {
+          "maxLength": 200,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Model"
+    },
+    "context_policy": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "title": "Context Policy",
+      "type": "string"
+    },
+    "evaluation": {
+      "additionalProperties": true,
+      "title": "Evaluation",
+      "type": "object"
+    },
+    "evidence_references": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "title": "Evidence References",
+      "type": "array"
+    },
+    "started_at": {
+      "format": "date-time",
+      "title": "Started At",
+      "type": "string"
+    },
+    "ended_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Ended At"
+    },
+    "accepted": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Accepted"
+    },
+    "human_interventions": {
+      "anyOf": [
+        {
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Human Interventions"
+    }
+  },
+  "required": [
+    "task",
+    "fixture_revision",
+    "starting_commit",
+    "condition",
+    "trial",
+    "order_seed",
+    "agent_count",
+    "context_policy",
+    "started_at"
+  ],
+  "title": "RunManifest",
+  "type": "object"
+}

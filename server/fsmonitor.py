@@ -29,6 +29,7 @@ IGNORED_SUFFIXES = {".pyc"}
 
 _tasks: dict[int, asyncio.Task] = {}
 _last_scan: dict[int, str] = {}
+_task_projects: dict[int, int] = {}
 
 
 def _ignored(path: Path) -> bool:
@@ -115,15 +116,17 @@ def _unified_diff(rel: str, old: str | None, new: str | None) -> str | None:
 
 
 def _record_changes(
-    project_id: int, changes: list[tuple[str, str, str, str | None, str | None]]
+    project_id: int, changes: list[tuple[str, str, str, str | None, str | None]], workspace_id: int | None = None, before_hashes: dict | None = None
 ) -> None:
     """Blocking (call via to_thread): one write transaction per SCAN, not per
     file — a git checkout touching 500 files is one lock acquisition instead
     of 500 serial ones on the event loop (issue #28 H4)."""
     with transaction() as conn:
         for action, rel, summary, diff, digest in changes:
-            claim_id = audit.find_recent_claim(conn, project_id, rel)
-            detail: dict[str, Any] = {"sha256": digest} if digest else {}
+            claim_id = audit.find_recent_claim(conn, project_id, rel, workspace_id)
+            detail: dict[str, Any] = {"workspace_id": workspace_id, "before_sha256": (before_hashes or {}).get(rel), "after_sha256": digest}
+            if digest:
+                detail["sha256"] = digest
             audit_id = audit.record(
                 conn, project_id, "monitor", "monitor", "monitor", action, summary,
                 target=rel, detail=detail, diff=diff, correlated_id=claim_id,
@@ -131,13 +134,13 @@ def _record_changes(
             if claim_id is None:
                 append_event(
                     conn, project_id, "audit_anomaly",
-                    {"audit_id": audit_id, "path": rel,
+                    {"audit_id": audit_id, "path": rel, "workspace_id": workspace_id,
                      "summary": f"Unattributed change: {rel} ({action})"},
                     target_agent_id=0,
                 )
 
 
-async def _watch_loop(project_id: int, root: Path) -> None:
+async def _watch_loop(project_id: int, root: Path, workspace_id: int) -> None:
     logger = setup_logging()
     logger.info("fsmonitor started %s", kv(project=project_id, path=root))
     # Silent baseline (the first scan is not an anomaly wall) — off-loop.
@@ -178,7 +181,7 @@ async def _watch_loop(project_id: int, root: Path) -> None:
         except Exception as exc:  # noqa: BLE001 — monitor must not die on FS weirdness
             logger.warning("fsmonitor scan failed %s", kv(project=project_id, error=exc))
             continue
-        _last_scan[project_id] = utc_now()
+        _last_scan[workspace_id] = utc_now()
         # Collect the whole scan's changes, then write them in ONE off-thread
         # transaction. On write failure the baseline does NOT advance, so the
         # changes are re-detected next poll instead of silently vanishing
@@ -210,7 +213,7 @@ async def _watch_loop(project_id: int, root: Path) -> None:
                 deleted.append(rel)
         if changes:
             try:
-                await asyncio.to_thread(_record_changes, project_id, changes)
+                await asyncio.to_thread(_record_changes, project_id, changes, workspace_id, {rel: m[2] for rel, m in baseline.items()})
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001
@@ -224,39 +227,51 @@ async def _watch_loop(project_id: int, root: Path) -> None:
         baseline = current
 
 
-def start_watch(project_id: int, path: str) -> None:
-    stop_watch(project_id)
-    _tasks[project_id] = asyncio.get_running_loop().create_task(
-        _watch_loop(project_id, Path(path))
-    )
+def start_watch(project_id: int, path: str, workspace_id: int | None = None) -> None:
+    row = audit.get_watch(project_id, workspace_id)
+    if row is None:
+        return
+    wid = row['workspace_id']
+    stop_watch(project_id, wid)
+    _task_projects[wid] = project_id
+    _tasks[wid] = asyncio.get_running_loop().create_task(_watch_loop(project_id, Path(path), wid))
 
 
-def stop_watch(project_id: int) -> None:
-    task = _tasks.pop(project_id, None)
-    if task is not None:
-        task.cancel()
+def stop_watch(project_id: int, workspace_id: int | None = None) -> None:
+    if workspace_id is None:
+        ids = [wid for wid, pid in _task_projects.items() if pid == project_id]
+    else:
+        ids = [workspace_id]
+    for wid in ids:
+        task = _tasks.pop(wid, None)
+        if task is not None:
+            task.cancel()
+        _last_scan.pop(wid, None)
+        _task_projects.pop(wid, None)
 
 
-def watch_status(project_id: int) -> dict[str, Any] | None:
-    row = audit.get_watch(project_id)
+def is_active(workspace_id: int) -> bool:
+    return workspace_id in _tasks and not _tasks[workspace_id].done()
+
+
+def watch_status(project_id: int, workspace_id: int | None = None) -> dict[str, Any] | None:
+    row = audit.get_watch(project_id, workspace_id)
     if row is None:
         return None
-    root = Path(row["path"])
-    active = project_id in _tasks and not _tasks[project_id].done()
-    files = sum(1 for p in root.rglob("*") if p.is_file() and not _ignored(p.relative_to(root))) if root.is_dir() else 0
-    return {"path": row["path"], "active": active, "files": files,
-            "last_scan": _last_scan.get(project_id),
-            "registered_at": row["created_at"]}
+    root = Path(row['path'])
+    return {'workspace_id': row['workspace_id'], 'path': row['path'], 'active': is_active(row['workspace_id']),
+            'files': len(_snapshot(root)), 'last_scan': _last_scan.get(row['workspace_id']), 'registered_at': row['created_at']}
 
 
 def start_all_watches() -> None:
-    """Called from the app lifespan: resume persisted watches."""
     from .db import query_all
-
-    for row in query_all("SELECT project_id, path FROM audit_watches"):
-        start_watch(row["project_id"], row["path"])
+    for row in query_all('SELECT * FROM audit_watches'):
+        start_watch(row['project_id'], row['path'], row['workspace_id'])
 
 
 def stop_all_watches() -> None:
-    for pid in list(_tasks):
-        stop_watch(pid)
+    for task in _tasks.values():
+        task.cancel()
+    _tasks.clear()
+    _task_projects.clear()
+    _last_scan.clear()

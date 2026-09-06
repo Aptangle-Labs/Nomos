@@ -109,6 +109,8 @@ def _apply_working_dir(
     except OSError as exc:
         raise ApiError(422, "invalid_path", f"Cannot prepare '{resolved}': {exc}") from exc
     with transaction() as conn:
+        from ..workspaces import ensure_workspace
+        ensure_workspace(conn, project_id, str(resolved), default=True)
         conn.execute(
             "UPDATE projects SET working_dir = ?, updated_at = ? WHERE id = ?",
             (str(resolved), utc_now(), project_id),
@@ -336,6 +338,7 @@ async def delete_project(project_id: int, _admin: Actor = AdminDep) -> dict:
         doc_ids = [r["id"] for r in conn.execute(
             "SELECT id FROM documents WHERE project_id = ?", (project_id,)
         ).fetchall()]
+        conn.execute("DELETE FROM ticket_dependencies WHERE project_id=?", (project_id,))
         conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
         for doc_id in doc_ids:
             conn.execute("DELETE FROM documents_fts WHERE rowid = ?", (doc_id,))
@@ -370,3 +373,4 @@ async def ticket_statuses(project_id: int) -> dict:
     project = get_project(project_id)
     settings = json.loads(project["settings"] or "{}")
     return ok({"statuses": settings.get("ticket_statuses", DEFAULT_TICKET_STATUSES)})
+

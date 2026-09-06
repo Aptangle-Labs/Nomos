@@ -31,7 +31,8 @@ Views.board = async function () {
       const n = Number(e.dataTransfer.getData("text/ticket-number"));
       if (!n) return;
       try {
-        await API.moveCard(pid, n, col.id);
+        const card = columns.flatMap(c => c.cards || []).find(t => t.number === n);
+        await API.moveCard(pid, n, col.id, card && card.revision);
         Views.board();
       } catch (err) { toast("Move Failed", err.message, "error"); }
     });
@@ -160,6 +161,7 @@ Views.ticketNew = async function () {
 
 /* ---------- ticket detail ---------- */
 Views.ticketDetail = async function (n) {
+  const collaborationRoute = location.hash;
   const pid = AC.state.pid;
   let t;
   try { t = await API.ticket(pid, n); }
@@ -168,14 +170,14 @@ Views.ticketDetail = async function (n) {
   const statusSel = el("select", {}, AC.state.statuses.map((s) =>
     el("option", { value: s, selected: s === t.status }, s)));
   statusSel.onchange = async () => {
-    try { await API.updateTicket(pid, n, { status: statusSel.value }); toast("Status", `#${n} → ${statusSel.value}`); }
+    try { await API.updateTicket(pid, n, { status: statusSel.value, expected_revision: t.revision }); toast("Status", `#${n} → ${statusSel.value}`); }
     catch (e) { toast("Error", e.message, "error"); Views.ticketDetail(n); }
   };
   const assigneeSel = el("select", {}, el("option", { value: "" }, "unassigned"),
     el("option", { value: AC.state.adminAlias, selected: t.assignee === AC.state.adminAlias }, AC.state.adminAlias + " (admin)"),
     AC.state.agents.map((a) => el("option", { value: a.alias, selected: t.assignee === a.alias }, a.alias)));
   assigneeSel.onchange = async () => {
-    try { await API.updateTicket(pid, n, { assignee: assigneeSel.value || null }); }
+    try { await API.updateTicket(pid, n, { assignee: assigneeSel.value || null, expected_revision: t.revision }); }
     catch (e) { toast("Error", e.message, "error"); Views.ticketDetail(n); }
   };
 
@@ -204,6 +206,9 @@ Views.ticketDetail = async function (n) {
     el("div", { class: "card" },
       el("div", { class: "rail-title" }, "Mentioned in"),
       backlinksBox));
+  page.append(await Collaboration.ticketControls(pid, t));
+  page.append(await Collaboration.evidenceControls(pid, t));
+  if (location.hash !== collaborationRoute) return;
   AC.setView(page);
 
   async function loadComments() {
@@ -242,6 +247,9 @@ Views.ticketDetail = async function (n) {
   const refresh = debounce(() => { if (location.hash.endsWith(`/tickets/${n}`)) Views.ticketDetail(n); }, 500);
   AC.on("ticket_updated", (pl) => { if ((pl.ticket && pl.ticket.number) === n) refresh(); }, "tdetail");
   AC.on("ticket_comment", (pl) => { if (pl.ticket_number === n) loadComments(); }, "tdetail-c");
+  AC.on("evidence_updated", (pl) => { if (pl.ticket_number === n) refresh(); }, "tdetail-e");
+  AC.on("completion_requested", (pl) => { if (pl.ticket_number === n) refresh(); }, "tdetail-p");
+  AC.on("completion_reviewed", (pl) => { if (pl.ticket_number === n) refresh(); }, "tdetail-r");
 };
 
 function buildTicketCommentComposer(pid, n, onPosted) {
@@ -261,3 +269,4 @@ function buildTicketCommentComposer(pid, n, onPosted) {
       el("span", { class: "spacer" }),
       el("button", { class: "btn-send", onclick: send }, "Comment")));
 }
+

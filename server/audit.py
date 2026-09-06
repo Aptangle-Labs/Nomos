@@ -148,7 +148,7 @@ def _window_cutoff() -> str:
 
 
 def find_recent_observation(
-    conn: sqlite3.Connection, project_id: int, action: str, target: str
+    conn: sqlite3.Connection, project_id: int, action: str, target: str, workspace_id: int | None = None
 ) -> int | None:
     """A file_* self-report is being inserted: find the most recent monitor
     observation of the same target within the window, to store on the new
@@ -160,15 +160,16 @@ def find_recent_observation(
         SELECT id FROM audit_log
         WHERE project_id = ? AND source = 'monitor' AND target = ?
           AND created_at >= ?
+          AND json_extract(detail, '$.workspace_id') IS ?
         ORDER BY id DESC LIMIT 1
         """,
-        (project_id, target, _window_cutoff()),
+        (project_id, target, _window_cutoff(), workspace_id),
     ).fetchone()
     return int(row["id"]) if row else None
 
 
 def find_recent_claim(
-    conn: sqlite3.Connection, project_id: int, target: str
+    conn: sqlite3.Connection, project_id: int, target: str, workspace_id: int | None = None
 ) -> int | None:
     """A monitor observation just landed: find a recent file_* self-report
     claiming the same target (forward correlation pass)."""
@@ -178,9 +179,10 @@ def find_recent_claim(
         WHERE project_id = ? AND source = 'self_report' AND target = ?
           AND action IN ('file_edit', 'file_create', 'file_delete')
           AND created_at >= ?
+          AND json_extract(detail, '$.workspace_id') IS ?
         ORDER BY id DESC LIMIT 1
         """,
-        (project_id, target, _window_cutoff()),
+        (project_id, target, _window_cutoff(), workspace_id),
     ).fetchone()
     return int(row["id"]) if row else None
 
@@ -208,5 +210,8 @@ def verify_chain(project_id: int) -> dict[str, Any]:
     return {"ok": True, "checked": checked, "first_divergence": None}
 
 
-def get_watch(project_id: int) -> sqlite3.Row | None:
-    return query_one("SELECT * FROM audit_watches WHERE project_id = ?", (project_id,))
+def get_watch(project_id: int, workspace_id: int | None = None) -> sqlite3.Row | None:
+    if workspace_id is None:
+        return query_one("SELECT * FROM audit_watches WHERE project_id=? AND is_legacy=1", (project_id,))
+    return query_one("SELECT * FROM audit_watches WHERE project_id=? AND workspace_id=?", (project_id, workspace_id))
+

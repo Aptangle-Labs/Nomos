@@ -91,8 +91,16 @@ def _admin_attention(project_id: int, agent_id: int) -> dict | None:
         """,
         (project_id, agent_id),
     )
-    if row is not None and row["c"]:
-        return {"admin_mentions_unseen": row["c"], "oldest_at": row["oldest"]}
+    outstanding = query_one(
+        "SELECT COUNT(*) AS c FROM inbox_requests r LEFT JOIN messages m ON m.id=r.message_id "
+        "WHERE r.project_id=? AND r.target_agent_id=? AND r.issuer_id=0 "
+        "AND r.state IN ('pending','acknowledged') AND (r.message_id IS NULL OR (m.deleted=0 AND EXISTS "
+        "(SELECT 1 FROM conversation_members cm WHERE cm.conversation_id=m.conversation_id AND cm.agent_id=?)))",
+        (project_id, agent_id, agent_id),
+    )["c"]
+    if (row is not None and row["c"]) or outstanding:
+        return {"admin_mentions_unseen": row["c"], "oldest_at": row["oldest"],
+                "admin_requests_outstanding": outstanding}
     return None
 
 
@@ -168,3 +176,4 @@ def check_project_access(actor: Actor, project_id: int) -> None:
 ActorDep = Depends(get_actor)
 AdminDep = Depends(require_admin)
 AgentDep = Depends(require_agent)
+
