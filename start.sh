@@ -28,6 +28,14 @@ fi
 "$PY" -m server.migrate
 
 echo "Nomos starting on ${NOMOS_HOST:-127.0.0.1}:${NOMOS_PORT:-8484} (Ctrl-C for graceful shutdown)"
+if [ "${NOMOS_NO_BROWSER:-0}" != "1" ]; then
+    # Subshell-orphaned so init reaps the helper: after exec below, uvicorn
+    # must never inherit a zombie child. The helper checks the server PID by
+    # signal instead of parentage.
+    ( "$PY" -m server.open_browser \
+        --host "${NOMOS_HOST:-127.0.0.1}" \
+        --port "${NOMOS_PORT:-8484}" --parent-pid "$$" & )
+fi
 exec "$PY" -m uvicorn server.main:app \
     --host "${NOMOS_HOST:-127.0.0.1}" \
     --port "${NOMOS_PORT:-8484}" \

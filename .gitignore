@@ -20,3 +20,6 @@ TODO.local.md
 
 # Build metadata from the editable install
 *.egg-info/
+
+# Local Nomos credentials and session state
+.nomos_*

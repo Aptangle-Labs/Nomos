@@ -10,35 +10,33 @@ Views.docs = async function () {
   AC.setView(el("div", { class: "page narrow" },
     el("div", { class: "spread" },
       el("h1", {}, "Documents"),
-      el("button", { class: "btn primary", onclick: newDocModal }, "+ New Document")),
+      el("button", { class: "btn primary", onclick: newDocModal }, "Create Document")),
     items.length
       ? el("div", { class: "card", style: "padding:0" }, items.map((d) =>
           el("div", { class: "doc-list-item", onclick: () => location.hash = `#/p/${pid}/docs/${encodeURIComponent(d.slug)}` },
-            el("span", { class: "t-micro faint" }, "MD"),
+            el("span", { class: "t-micro faint" }, "md"),
             el("span", { class: "t-emphasis", style: "flex:1" }, d.title),
             el("span", { class: "t-chrome faint" }, "rev " + d.current_revision + " · " + timeAgo(d.updated_at)))))
       : el("div", { class: "empty" },
           el("div", { class: "glyph" }, "⌀"),
-          el("div", { class: "e-title" }, "No Documents Yet"),
-          el("p", {}, "Agents and you share versioned markdown here."))));
+          el("div", { class: "e-title" }, "No documents yet"),
+          el("p", {}, "Share versioned documents with your team."), el("button", {class:"btn", onclick:newDocModal}, "Create Document"))));
 
   function newDocModal() {
     const title = el("input", { type: "text", placeholder: "Document title" });
     const slug = el("input", { type: "text", placeholder: "slug (optional, auto from title)" });
     modal({
-      title: "New Document",
-      body: el("div", {},
-        el("div", { class: "field" }, el("label", {}, "Title"), title),
-        el("div", { class: "field" }, el("label", {}, "Slug"), slug)),
-      confirmText: "Create", onValidate: () => title.value.trim().length > 0,
-    }).then(async (okd) => {
-      if (!okd) return;
-      try {
-        const d = await API.createDocument(pid, {
-          title: title.value.trim(), slug: slug.value.trim() || undefined, body: "# " + title.value.trim() + "\n",
-        });
+      title:"Create Document", icon:"docs", confirmText:"Create Document",
+      isDirty:() => !!(title.value || slug.value),
+      body:el("div", {},
+        el("div", {class:"field"}, el("label", {}, "Title"), title),
+        el("div", {class:"field"}, el("label", {}, "Slug"), slug)),
+      onValidate:() => !!title.value.trim(),
+      onConfirm:async () => {
+        const d = await API.createDocument(pid, {title:title.value.trim(), slug:slug.value.trim() || undefined, body:"# " + title.value.trim() + "\n"});
+        toast("Document Created", d.title);
         location.hash = `#/p/${pid}/docs/${encodeURIComponent(d.slug)}/edit`;
-      } catch (e) { toast("Create Failed", e.message, "error"); }
+      },
     });
   }
   AC.on("document_created", () => Views.docs(), "docs");
@@ -123,11 +121,11 @@ Views.docView = async function (slug) {
     el("span", { style: "flex:1" }, r.title || ""),
     el("span", { class: "muted small" }, r.author),
     el("span", { class: "faint small" }, fmtTime(r.created_at)),
-    el("button", { class: "btn small", onclick: (e) => { e.stopPropagation(); showDiff(r); } }, "diff"))));
+    el("button", { class: "btn small", onclick: (e) => { e.stopPropagation(); showDiff(r); } }, "Diff"))));
 
   AC.setView(el("div", { class: "page narrow" },
     el("div", { class: "row", style: "gap:12px;margin-bottom:16px" },
-      el("a", { href: `#/p/${pid}/docs`, class: "muted" }, "← documents"),
+      el("a", { href: `#/p/${pid}/docs`, class: "muted" }, "← Documents"),
       el("span", { class: "t-display", style: "flex:1" }, doc.title),
       el("button", { class: "btn", onclick: shareToChannel }, "Share…"),
       el("button", { class: "btn primary", onclick: () => location.hash = `#/p/${pid}/docs/${encodeURIComponent(slug)}/edit` }, "Edit")),
@@ -149,6 +147,9 @@ Views.docEdit = async function (slug) {
 
   const title = el("input", { type: "text", value: doc.title });
   const ta = el("textarea", { rows: 24, class: "input mono" }, doc.body || "");
+  let savedTitle = doc.title, savedBody = doc.body || "";
+  const dirty = () => title.value !== savedTitle || ta.value !== savedBody;
+  AC._leaveGuard = async () => !dirty() || await confirmDiscard();
   let baseRevision = doc.current_revision;
   const baseNote = el("span", { class: "t-chrome faint" }, `editing from revision ${baseRevision}`);
   const conflictBox = el("div", {});
@@ -158,7 +159,8 @@ Views.docEdit = async function (slug) {
       const d = await API.saveDocument(pid, slug, {
         title: title.value.trim() || doc.title, body: ta.value, base_revision: baseRevision,
       });
-      toast("Saved", `${d.title} → revision ${d.current_revision}`);
+      AC._leaveGuard = null;
+      toast("Document Saved", `${d.title} → revision ${d.current_revision}`);
       location.hash = `#/p/${pid}/docs/${encodeURIComponent(slug)}`;
     } catch (e) {
       if (e.status === 409) {
@@ -181,24 +183,26 @@ Views.docEdit = async function (slug) {
                 baseNote.textContent = `rebased onto revision ${baseRevision} — resolve differences in the editor, then save`;
                 conflictBox.replaceChildren();
               },
-            }, "Rebase onto rev " + serverRev + " (keep my text)"),
+            }, "Rebase Onto Rev " + serverRev + " (Keep My Text)"),
             el("button", {
-              class: "btn small", onclick: () => {
+              class: "btn small danger", onclick: async () => {
+                if (!await confirmDiscard()) return;
                 ta.value = serverBody;
+                savedBody = serverBody;
                 baseRevision = serverRev;
                 baseNote.textContent = `editing from revision ${baseRevision}`;
                 conflictBox.replaceChildren();
               },
-            }, "Discard mine, take server version"))));
-        conflictBox.scrollIntoView({ behavior: "smooth" });
+            }, "Discard Draft and Use Server Version"))));
+        conflictBox.scrollIntoView({ behavior: Motion.scroll() });
       } else toast("Save Failed", e.message, "error");
     }
   };
 
   AC.setView(el("div", { class: "page narrow" },
     el("div", { class: "row", style: "gap:12px;margin-bottom:16px" },
-      el("a", { href: `#/p/${pid}/docs/${encodeURIComponent(slug)}`, class: "muted" }, "← back"),
-      el("span", { class: "t-display" }, "Edit document")),
+      el("a", { href: `#/p/${pid}/docs/${encodeURIComponent(slug)}`, class: "muted" }, "← Back"),
+      el("span", { class: "t-display" }, "Edit Document")),
     el("div", { class: "card" },
       el("div", { class: "field" }, el("label", {}, "Title"), title),
       el("div", { class: "field" }, el("label", {}, "Body (markdown)"), ta),
@@ -221,7 +225,8 @@ Views.search = async function () {
   const authorSel = el("select", {}, el("option", { value: "" }, "any author"),
     el("option", { value: AC.state.adminAlias }, AC.state.adminAlias + " (admin)"),
     AC.state.agents.map((a) => el("option", { value: a.alias }, a.alias)));
-  const results = el("div", {});
+  const searchHelp = () => emptyState("search", "Search this project", "Enter words to find messages, tickets and documents.", el("button", {class:"btn", onclick:() => q.focus()}, "Enter Search Terms"));
+  const results = el("div", {}, searchHelp());
 
   /* Slack-style typed modifiers: from:alias, in:#channel — pulled out of the
      query text and applied as filters (dropdowns act as fallbacks). */
@@ -242,7 +247,7 @@ Views.search = async function () {
 
   const run = async () => {
     const raw = q.value.trim();
-    if (!raw) { results.replaceChildren(); return; }
+    if (!raw) { results.replaceChildren(searchHelp()); return; }
     const { text, author, channel } = parseQuery(raw);
     if (!text) { results.replaceChildren(el("div", { class: "empty" }, el("p", {}, "Add search terms beside the filters."))); return; }
     results.replaceChildren(el("div", { class: "spinner" }, "searching…"));
@@ -256,8 +261,8 @@ Views.search = async function () {
         ? el("div", { class: "card", style: "padding:0" }, items.map(renderHit))
         : el("div", { class: "empty" },
             el("div", { class: "glyph" }, "⌀"),
-            el("div", { class: "e-title" }, "No Results"),
-            el("p", {}, `Nothing matches "${text}".`)));
+            el("div", { class: "e-title" }, "No results"),
+            el("p", {}, `Nothing matches "${text}". Try fewer words or clear the filters.`), el("button", {class:"btn", onclick:() => { q.value=""; typeSel.value=""; chanSel.value=""; authorSel.value=""; run(); q.focus(); }}, "Clear Search")));
     } catch (e) { results.replaceChildren(el("div", { class: "empty" }, el("p", {}, e.message))); }
   };
 

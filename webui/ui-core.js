@@ -49,6 +49,9 @@ const AC = {
       if (p && p.ok) AC.state.emojiMap = p.data.emoji || {};
     } catch (e) { /* cosmetic only */ }
     window.addEventListener("hashchange", () => AC.route());
+    const statusbar = document.getElementById("statusbar");
+    statusbar.setAttribute("role", "button"); statusbar.tabIndex = 0;
+    statusbar.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); statusbar.click(); } });
     document.getElementById("statusbar").addEventListener("click", () => {
       if (AC.state.pid) location.hash = `#/p/${AC.state.pid}/activity`;
     });
@@ -65,6 +68,9 @@ const AC = {
       try { localStorage.setItem("ac-theme", next); } catch (e) {}
       syncThemeBtn();
     });
+    themeBtn.replaceChildren(Icons.theme());
+    document.getElementById("bell").prepend(Icons.bell());
+    document.getElementById("bell").childNodes.forEach(n => { if (n.nodeType === 3) n.remove(); });
     syncThemeBtn();
     AC.renderTopbar();
     AC.route();
@@ -113,8 +119,18 @@ const AC = {
   },
 
   // ---------- router ----------
+  _routeSeq: 0,
   async route() {
     const hash = location.hash || "#/";
+    const token = ++AC._routeSeq;
+    if (activeModal && activeModal.beforeRoute && activeModal.beforeRoute(hash)) return;
+    if (AC._leaveGuard && hash !== AC._viewHash) {
+      const allowed = await AC._leaveGuard();
+      if (token !== AC._routeSeq) return; // superseded while prompting
+      if (!allowed) { history.replaceState(null, "", AC._viewHash); return; }
+      AC._leaveGuard = null;
+    }
+    if (activeModal) closeModal(false);
     const parts = hash.replace(/^#\//, "").split("/").filter(Boolean);
 
     if (!AC.state.setupComplete) { Views.setup(); return; }
@@ -136,7 +152,7 @@ const AC = {
         const sub = parts[2] || "chat";
         if (sub === "chat" || sub === "c") await Views.projectChat(parts[3] ? Number(parts[3]) : null, parts[5] ? Number(parts[5]) : null);
         else if (sub === "board") await Views.board();
-        else if (sub === "tickets" && parts[3] === "new") await Views.ticketNew();
+        else if (sub === "tickets" && parts[3] === "new") { await Views.tickets(); Views.ticketNew(); }
         else if (sub === "tickets" && parts[3]) await Views.ticketDetail(Number(parts[3]));
         else if (sub === "tickets") await Views.tickets();
         else if (sub === "docs" && parts[3] && parts[4] === "edit") await Views.docEdit(decodeURIComponent(parts[3]));
@@ -145,6 +161,7 @@ const AC = {
         else if (sub === "search") await Views.search();
         else if (sub === "agents") await Views.agentsAdmin();
         else if (sub === "settings") await Views.settings();
+        else if (sub === "dashboard") await Views.projectDashboard();
         else if (sub === "decisions") await Views.decisions();
         else if (Object.prototype.hasOwnProperty.call(Views, sub)) await Views[sub]();
         else await Views.projectChat(null, null);
@@ -158,6 +175,9 @@ const AC = {
   },
 
   setView(node) {
+    const changed = AC._viewHash !== location.hash;
+    AC._viewHash = location.hash;
+    if (changed && !Motion.reduced()) node.classList.add("view-enter");
     document.getElementById("view").replaceChildren(node);
   },
 
@@ -227,7 +247,7 @@ const AC = {
         class: "side-row" + (sub === key ? " active" : ""),
         href: `#/p/${pid}/${key}`,
       },
-        el("span", { class: "glyph" }, glyph),
+        el("span", { class: "glyph" }, (Icons[key] || Icons.decisions)()),
         el("span", { class: "name" }, label),
         badge ? el("span", { class: "count" }, String(badge)) : null);
 
@@ -249,7 +269,7 @@ const AC = {
       const mentions = mentionsByConv[d.id] || 0;
       const av = el("span", { class: "av-wrap" },
         AC.avatarEl(other || label, 20),
-        other ? el("span", { class: "presence " + (other.online ? "online" : "away") }) : null);
+        other ? el("span", { class: "presence " + (other.online ? "online" : "away"), title:other.online ? "Online" : "Away", "aria-label":other.online ? "Online" : "Away" }, other.online ? Icons.check() : Icons.minus()) : null);
       return el("a", {
         class: "side-row" + (activeConv === d.id ? " active" : "")
           + (unreadOf(d) ? " unread" : "") + (mentions ? " has-mentions" : ""),
@@ -276,6 +296,7 @@ const AC = {
           },
         },
           el("span", { class: "caret" }, collapsed ? "▸" : "▾"),
+          el("span", {class:"section-icon"}, key === "channels" ? Icons.channels() : Icons.chat()),
           el("span", {}, label),
           el("span", { class: "flex" }),
           onAdd ? el("button", { class: "add", title: "Add", onclick: onAdd }, "+") : null),
@@ -302,7 +323,7 @@ const AC = {
         navRow("outcomes", "↗", "Outcomes")),
       section("channels", "Channels", AC.state.channels.map(channelRow),
         () => AC._dispatch("sidebar_add_channel", null)),
-      section("dms", "Direct messages", AC.state.dms.map(dmRow),
+      section("dms", "Direct Messages", AC.state.dms.map(dmRow),
         () => AC._dispatch("sidebar_add_dm", null)),
     );
   },
@@ -512,13 +533,13 @@ const AC = {
     const cur = (location.hash.replace(/^#\//, "").split("/")[2] || "chat");
     const tabs = [
       ["chat", "Chat"], ["board", "Board"], ["tickets", "Tickets"], ["docs", "Docs"],
-      ["search", "Search"], ["agents", "Agents"], ["audit", "Audit"], ["settings", "Settings"],
+      ["search", "Search"], ["agents", "Agents"], ["audit", "Audit"], ...(AC.state.adminAlias ? [["dashboard", "Dashboard"]] : []), ["settings", "Settings"],
     ];
     nav.replaceChildren(
       el("span", { class: "proj-name" }, AC.state.project.name,
         AC.state.project.archived ? el("span", { class: "pill archived", style: "margin-left:8px" }, "archived") : null),
       ...tabs.map(([key, label]) =>
-        el("a", { class: "tab" + ((cur === key || (key === "chat" && cur === "c")) ? " active" : ""), href: `#/p/${pid}/${key}` }, label))
+        el("a", { class: "tab" + ((cur === key || (key === "chat" && cur === "c")) ? " active" : ""), href: `#/p/${pid}/${key}` }, (Icons[key] || Icons.circle)(), label))
     );
     AC.updateBell();
   },
@@ -526,33 +547,136 @@ const AC = {
 
 /* ---------- toasts ---------- */
 function toast(title, msg, kind) {
-  const t = el("div", { class: "toast" + (kind ? " " + kind : "") },
-    el("div", { class: "t-title" }, title), el("div", {}, String(msg || "")));
+  const t = el("div", { class: "toast" + (kind ? " " + kind : ""), role:kind === "error" ? "alert" : "status" },
+    el("div", { class: "t-title" }, kind === "error" ? Icons.block() : kind === "warn" ? Icons.attention() : Icons.check(), title), el("div", {}, String(msg || "") + (kind === "error" ? " Review the details and try again." : "")));
   document.getElementById("toasts").append(t);
-  setTimeout(() => t.remove(), kind === "error" ? 8000 : 4500);
+  setTimeout(() => { t.classList.add("closing"); setTimeout(() => t.remove(), Motion.reduced() ? 0 : 100); }, kind === "error" ? 8000 : 4500);
 }
 
 /* ---------- modals ---------- */
-function modal({ title, body, confirmText, danger, onValidate }) {
+let activeModal = null;
+let modalSequence = 0;
+function closeModal(value = false) {
+  if (activeModal) activeModal(value);
+}
+function modal({ title, body, confirmText = "Confirm", danger = false, onValidate, onConfirm, isDirty, icon }) {
+  // Replacing a dialog settles the old promise before taking over its root.
+  closeModal(false);
   return new Promise((resolve) => {
     const root = document.getElementById("modal-root");
-    const close = (val) => { root.replaceChildren(); resolve(val); };
+    const opener = document.activeElement;
+    const id = "modal-" + ++modalSequence;
+    let closed = false, busy = false, discarding = false, pendingNavigation = null;
+    const modalHash = location.hash || "#/";
+    const app = document.getElementById("app");
+    const priorInert = app.inert;
+    app.inert = true;
+    const error = el("p", {class:"modal-error danger-text", role:"alert", hidden:true});
+    const content = el("div", {id:id + "-body"}, body);
+    const heading = el("h3", {id:id + "-title"}, icon ? Icons[icon]() : Icons.forAction(title), title);
+    const finish = (value, immediate = false) => {
+      if (closed) return;
+      closed = true;
+      document.removeEventListener("keydown", keydown, true);
+      document.removeEventListener("focusin", focusin, true);
+      if (activeModal === cancelExternal) { activeModal = null; app.inert = priorInert; }
+      const remove = () => {
+        overlay.remove();
+        if (!activeModal) app.inert = priorInert;
+        resolve(value);
+        // Focus returns AFTER the caller resumes: openers disabled during
+        // their action re-enable in a finally, so give them one tick.
+        if (!activeModal) setTimeout(() => {
+          if (activeModal || !opener || !opener.isConnected) return;
+          if (!opener.disabled) opener.focus();
+        }, 0);
+      };
+      if (immediate || Motion.reduced()) remove();
+      else { overlay.classList.add("closing"); setTimeout(remove, 100); }
+    };
+    const cancelExternal = (value) => finish(value, true);
+    const cancel = () => {
+      if (busy || closed) return;
+      if (isDirty && isDirty() && !discarding) {
+        discarding = true;
+        heading.replaceChildren(Icons.trash(), "Discard Draft?");
+        content.hidden = true;
+        error.hidden = true;
+        warning.hidden = false;
+        confirmBtn.className = "btn danger";
+        confirmBtn.replaceChildren(Icons.trash(), "Discard Draft");
+        cancelBtn.replaceChildren(Icons.close(), "Keep Editing");
+        cancelBtn.focus();
+      } else if (discarding) {
+        discarding = false; pendingNavigation = null;
+        heading.replaceChildren(icon ? Icons[icon]() : Icons.forAction(title), title);
+        content.hidden = false; warning.hidden = true;
+        confirmBtn.className = "btn " + (danger ? "danger" : "primary");
+        confirmBtn.replaceChildren(Icons.forAction(confirmText), confirmText);
+        cancelBtn.replaceChildren(Icons.close(), "Cancel");
+        focusFirst();
+      } else finish(false);
+    };
+    const cancelBtn = el("button", {class:"btn quiet", onclick:cancel}, "Cancel");
     const confirmBtn = el("button", {
-      class: "btn " + (danger ? "danger" : "primary"),
-      onclick: () => {
-        if (onValidate && !onValidate(box)) return;
-        close(true);
+      class:"btn " + (danger ? "danger" : "primary"),
+      onclick: async () => {
+        if (busy || closed) return;
+        if (discarding) { const target = pendingNavigation; finish(false); if (target) location.hash = target; return; }
+        if (onValidate && !onValidate(box)) {
+          error.textContent = "Check the required fields and try again.";
+          error.hidden = false; return;
+        }
+        busy = true; confirmBtn.disabled = true; cancelBtn.disabled = true;
+        try {
+          if (onConfirm && await onConfirm() === false) return;
+          finish(true);
+        } catch (e) {
+          error.textContent = confirmText + " failed: " + e.message + " Review the fields and try again.";
+          error.hidden = false;
+        } finally { busy = false; if (!closed) { confirmBtn.disabled = false; cancelBtn.disabled = false; } }
       },
-    }, confirmText || "Confirm");
-    const box = el("div", { class: "modal" },
-      el("h3", {}, title),
-      body || null,
-      el("div", { class: "m-btns" },
-        el("button", { class: "btn", onclick: () => close(false) }, "Cancel"),
-        confirmBtn));
-    const overlay = el("div", { class: "modal-overlay", onclick: (e) => { if (e.target === overlay) close(false); } }, box);
-    root.replaceChildren(overlay);
+    }, confirmText);
+    const warning = el("p", {hidden:true}, "Your unsaved changes will be lost.");
+    const box = el("div", {class:"modal", role:"dialog", "aria-modal":"true", "aria-labelledby":id+"-title", "aria-describedby":id+"-body", tabindex:"-1"},
+      heading, content, warning, error, el("div", {class:"m-btns"}, confirmText === "Close" ? null : cancelBtn, confirmBtn));
+    const overlay = el("div", {class:"modal-overlay"}, box);
+    overlay.addEventListener("click", e => { if (e.target === overlay) cancel(); });
+    const focusable = () => Array.from(box.querySelectorAll('button, input:not([type="hidden"]), select, textarea, a[href], [tabindex="0"]'))
+      .filter(n => !n.disabled && !n.closest('[hidden]'));
+    const focusFirst = () => (danger ? cancelBtn : focusable()[0] || box).focus();
+    const focusin = e => { if (!box.contains(e.target) && !closed) focusFirst(); };
+    const keydown = e => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopImmediatePropagation(); cancel(); }
+      if (e.key === "Tab") {
+        const nodes = focusable(), first = nodes[0] || box, last = nodes[nodes.length-1] || box;
+        if (e.shiftKey && (document.activeElement === first || document.activeElement === box)) { e.preventDefault(); last.focus(); }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+      }
+    };
+    cancelExternal.beforeRoute = target => {
+      if (target === modalHash || busy || !isDirty || !isDirty()) return false;
+      if (!discarding) cancel();
+      pendingNavigation = target;
+      history.replaceState(null, "", modalHash);
+      return true;
+    };
+    root.append(overlay);
+    activeModal = cancelExternal;
+    document.addEventListener("keydown", keydown, true);
+    document.addEventListener("focusin", focusin, true);
+    focusFirst();
   });
+}
+async function reasonModal(title, message, danger = true) {
+  const reason = el("textarea", {rows:3, required:true, placeholder:"Explain the reason"});
+  const ok = await modal({title, danger, confirmText:title,
+    body:el("div", {}, el("p", {}, message), el("label", {class:"field"}, "Reason", reason)),
+    onValidate:() => !!reason.value.trim()});
+  return ok ? reason.value.trim() : null;
+}
+async function confirmDiscard() {
+  return modal({title:"Discard Draft?", body:el("p", {}, "Your unsaved changes will be lost."), confirmText:"Discard Draft", danger:true});
 }
 
 /* Bell dropdown behavior */

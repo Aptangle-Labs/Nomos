@@ -68,20 +68,21 @@ function registerSidebarAdders() {
 async function sidebarAddChannel() {
   const name = el("input", { type: "text", placeholder: "channel-name", maxlength: 50 });
   const topic = el("input", { type: "text", placeholder: "Topic (optional)", maxlength: 200 });
-  const okd = await modal({
-    title: "CREATE CHANNEL",
-    body: el("div", {},
-      el("div", { class: "field" }, el("label", {}, "Name"), name),
-      el("div", { class: "field" }, el("label", {}, "Topic"), topic)),
-    confirmText: "Create Channel",
-    onValidate: () => name.value.trim().length >= 2,
+  const pid = AC.state.pid;
+  await modal({
+    title:"Create Channel", icon:"channels", confirmText:"Create Channel",
+    isDirty:() => !!(name.value || topic.value),
+    body:el("div", {},
+      el("div", {class:"field"}, el("label", {}, "Name"), name),
+      el("div", {class:"field"}, el("label", {}, "Topic"), topic)),
+    onValidate:() => name.value.trim().length >= 2,
+    onConfirm:async () => {
+      const ch = await API.createChannel(pid, name.value.trim(), topic.value.trim());
+      toast("Channel Created", ch.name);
+      await AC.refreshSidebarData();
+      location.hash = `#/p/${pid}/c/${ch.id}`;
+    },
   });
-  if (!okd) return;
-  try {
-    const ch = await API.createChannel(AC.state.pid, name.value.trim(), topic.value.trim());
-    await AC.refreshSidebarData();
-    location.hash = `#/p/${AC.state.pid}/c/${ch.id}`;
-  } catch (e) { toast("Error", e.message, "error"); }
 }
 
 async function sidebarAddDm() {
@@ -90,7 +91,7 @@ async function sidebarAddDm() {
       el("option", { value: a.alias }, a.alias)));
   if (!sel.children.length) { toast("No Agents", "Nobody to message yet."); return; }
   const okd = await modal({
-    title: "OPEN DIRECT MESSAGE",
+    title: "Open Direct Message",
     body: el("div", { class: "field" }, el("label", {}, "With"), sel),
     confirmText: "Open DM",
   });
@@ -109,7 +110,7 @@ Views.projectChat = async function (cid, mid) {
   if (cid == null) {
     const main = AC.state.channels.find((c) => c.is_main) || AC.state.channels[0];
     if (!main) { AC.setView(el("div", { class: "empty" }, el("div", { class: "glyph" }, "⌀"),
-      el("div", { class: "e-title" }, "No Channels"), el("p", {}, "This project has no channels yet."))); return; }
+      el("div", { class: "e-title" }, "No channels"), el("p", {}, "Create a channel to start a conversation."), el("button", {class:"btn", onclick:sidebarAddChannel}, "Create Channel"))); return; }
     cid = main.id;
   }
 
@@ -289,6 +290,8 @@ Views.projectChat = async function (cid, mid) {
 
   function renderAll() {
     scroller.replaceChildren();
+    if (!Chat.order.length) scroller.append(emptyState("chat", "Start the conversation", "Share an update or ask your team a question.",
+      el("button", {class:"btn", onclick:() => composerWrap.querySelector("textarea").focus()}, "Write a Message")));
     let prev = null, prevDay = null, sysRun = [];
     const flushSysRun = () => {
       if (!sysRun.length) return;
@@ -314,7 +317,7 @@ Views.projectChat = async function (cid, mid) {
       if (Chat.prevLastSeen && m.id > Chat.prevLastSeen && !scroller.querySelector(".new-line")
           && m.role !== "admin") {
         flushSysRun();
-        scroller.append(el("div", { class: "new-line" }, el("span", { class: "tag" }, "NEW")));
+        scroller.append(el("div", { class: "new-line" }, el("span", { class: "tag" }, "New")));
         prev = null;
       }
       if (m.role === "system") { sysRun.push(m); prev = null; continue; }
@@ -373,13 +376,13 @@ Views.projectChat = async function (cid, mid) {
   }
 
   function scrollToBottom(smooth) {
-    scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior: smooth ? Motion.scroll() : "auto" });
     Chat.atBottom = true; Chat.unseenWhileUp = 0; updateJumpPill();
   }
 
   function updateJumpPill() {
     jumpBtn.classList.toggle("hidden", Chat.unseenWhileUp === 0);
-    jumpBtn.textContent = `↓ ${Chat.unseenWhileUp} new message${Chat.unseenWhileUp === 1 ? "" : "s"}`;
+    jumpBtn.textContent = `↓ ${Chat.unseenWhileUp} New Message${Chat.unseenWhileUp === 1 ? "" : "s"}`;
   }
 
   function markSeenNewest() {
@@ -582,8 +585,8 @@ function buildMessageRow(m, opts) {
   } else {
     const head = el("div", { class: "m-head" },
       el("span", { class: "m-author", onclick: (e) => showProfilePopover(e, m.author) }, m.author),
-      m.role === "admin" ? el("span", { class: "role-tag admin" }, "admin") : null,
-      m.type === "decision" ? el("span", { class: "role-tag decision" }, "decision") : null,
+      m.role === "admin" ? el("span", { class: "role-tag admin" }, "Admin") : null,
+      m.type === "decision" ? el("span", { class: "role-tag decision" }, "Decision") : null,
       el("span", { class: "m-time", title: new Date(m.created_at).toLocaleString() }, fmtTime(m.created_at)),
       m.edited_at ? el("span", { class: "edited-note", title: "edited " + fmtTime(m.edited_at) }, "(edited)") : null);
     const av = AC.avatarEl({ alias: m.author, avatar: m.avatar }, 36);
@@ -592,8 +595,10 @@ function buildMessageRow(m, opts) {
     node = el("div", { class: rowClass.join(" "), "data-mid": m.id }, av, head, body);
   }
 
+  node.tabIndex = 0;
+  node.setAttribute("aria-label", "Message from " + m.author);
   if (!m.deleted && m.id > 0) node.append(buildHoverToolbar(m, opts));
-  return node;
+  return Motion.once(node, `message:${AC.state.pid}:${m.id}`);
 }
 
 function buildHoverToolbar(m, opts) {
@@ -614,19 +619,19 @@ function buildHoverToolbar(m, opts) {
   }
   bar.append(el("button", { title: "Forward", onclick: () => openForwardDialog(m) }, "⇱"));
   bar.append(el("button", {
-    title: saved ? "Remove from saved" : "Save for later",
+    title: saved ? "Remove From Saved" : "Save for Later",
     style: saved ? "color: var(--amber)" : "",
     onclick: async (e) => {
       try {
         const res = await API.toggleSave(pid, m.id);
         if (opts.savedSet) res.saved ? opts.savedSet.add(m.id) : opts.savedSet.delete(m.id);
         e.currentTarget.style.color = res.saved ? "var(--amber)" : "";
-        e.currentTarget.title = res.saved ? "Remove from saved" : "Save for later";
+        e.currentTarget.title = res.saved ? "Remove From Saved" : "Save for Later";
       } catch (err) { toast("Error", err.message, "error"); }
     },
   }, "⚑"));
   bar.append(el("button", {
-    title: m.pinned ? "Unpin" : "Pin to channel",
+    title: m.pinned ? "Unpin" : "Pin to Channel",
     style: m.pinned ? "color: var(--amber)" : "",
     onclick: () => (m.pinned ? API.unpinMessage(pid, m.id) : API.pinMessage(pid, m.id))
       .catch((e) => toast("Error", e.message, "error")),
@@ -638,7 +643,7 @@ function buildHoverToolbar(m, opts) {
     class: "danger", title: "Delete",
     onclick: async () => {
       const okd = await modal({
-        title: "DELETE MESSAGE", danger: true, confirmText: "Delete",
+        title: "Delete Message?", danger: true, confirmText: "Delete",
         body: el("div", {}, el("p", { class: "muted" }, "This cannot be undone."),
           el("div", { class: "card" }, (m.body || "(attachment)").slice(0, 200))),
       });
@@ -662,17 +667,22 @@ function inlineEdit(m) {
   const ta = el("textarea", { class: "input", style: "min-height: 60px" });
   ta.value = m.body;
   const save = async () => {
-    try { await API.editMessage(pid, m.id, ta.value); }
+    try { await API.editMessage(pid, m.id, ta.value); AC._leaveGuard = null; toast("Message Updated", "Your changes were saved."); AC.route(); }
     catch (e) { toast("Error", e.message, "error"); }
   };
+  const cancel = async () => {
+    if (ta.value !== m.body && !await confirmDiscard()) return;
+    AC._leaveGuard = null; AC.route();
+  };
+  AC._leaveGuard = async () => ta.value === m.body || await confirmDiscard();
   node.replaceChildren(ta,
     el("div", { style: "display:flex;gap:8px;margin-top:8px" },
       el("button", { class: "btn small primary", onclick: save }, "Save"),
-      el("button", { class: "btn small", onclick: () => AC.route() }, "Cancel")));
+      el("button", { class: "btn small", onclick: cancel }, "Cancel")));
   ta.focus();
   ta.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); save(); }
-    if (e.key === "Escape") AC.route();
+    if (e.key === "Escape") cancel();
   });
 }
 
@@ -710,11 +720,11 @@ function buildThreadBar(m, onOpen) {
 
 function buildForwardedEmbed(f) {
   if (f.missing) {
-    return el("div", { class: "fwd" }, el("div", { class: "fwd-src" }, "FORWARDED MESSAGE"),
+    return el("div", { class: "fwd" }, el("div", { class: "fwd-src" }, "Forwarded Message"),
       el("div", { class: "fwd-body" }, el("em", { class: "faint" }, "The original message no longer exists.")));
   }
-  const srcLabel = f.conversation_type === "dm" ? "FROM A DIRECT MESSAGE"
-    : "FORWARDED FROM " + (f.conversation_label || "").toUpperCase();
+  const srcLabel = f.conversation_type === "dm" ? "From a direct message"
+    : "Forwarded from " + (f.conversation_label || "");
   const bodyNode = f.deleted
     ? el("div", { class: "fwd-body" }, el("em", { class: "faint" }, "This message was deleted."))
     : el("div", { class: "fwd-body" }, renderMd(f.body));
@@ -741,7 +751,7 @@ function buildForwardedEmbed(f) {
 }
 
 function buildFileCard(a) {
-  const ext = ((a.filename || "").split(".").pop() || "file").slice(0, 4).toUpperCase();
+  const ext = ((a.filename || "").split(".").pop() || "file").slice(0, 4).toLowerCase();
   return el("a", { class: "file-card", href: a.url || API.attachmentUrl(AC.state.pid, a.id), download: a.filename },
     el("span", { class: "tile" }, ext),
     el("span", { class: "fname" }, a.filename),
@@ -751,7 +761,7 @@ function buildFileCard(a) {
 
 function buildDocCard(d) {
   return el("a", { class: "file-card doc-card", href: `#/p/${AC.state.pid}/docs/${encodeURIComponent(d.slug)}` },
-    el("span", { class: "tile" }, "MD"),
+    el("span", { class: "tile" }, "md"),
     el("span", { class: "fname" }, d.title),
     el("span", { class: "fmeta" }, `rev ${d.current_revision}${d.author ? " · " + d.author : ""}`),
     el("span", { class: "open" }, "Open →"));
@@ -797,14 +807,14 @@ async function openForwardDialog(m) {
     ...conversationChoices().map((c) => el("option", { value: c.id }, c.label)));
   const comment = el("textarea", { class: "input", placeholder: "Add a message, if you'd like (optional)" });
   const preview = el("div", { class: "fwd", style: "margin-top: 12px" },
-    el("div", { class: "fwd-src" }, "PREVIEW"),
+    el("div", { class: "fwd-src" }, "Preview"),
     el("div", { class: "fwd-head" },
       AC.avatarEl({ alias: m.author, avatar: m.avatar }, 16),
       el("span", { class: "fwd-author" }, m.author),
       el("span", { class: "fwd-time" }, fmtTime(m.created_at))),
     el("div", { class: "fwd-body" }, renderMd((m.body || "(attachment)").slice(0, 600))));
   const okd = await modal({
-    title: "FORWARD MESSAGE",
+    title: "Forward Message",
     confirmText: "Forward",
     body: el("div", {},
       el("div", { class: "field" }, el("label", {}, "To"), sel),
@@ -826,17 +836,17 @@ async function showPinsFlyout(cid) {
   try { pins = await API.pins(pid, cid); } catch (e) { toast("Error", e.message, "error"); return; }
   const items = pins.items || [];
   await modal({
-    title: `PINNED — ${items.length}`,
+    title: `Pinned Messages · ${items.length}`,
     confirmText: "Close",
     body: items.length
       ? el("div", {}, ...items.map((p) => el("div", {
           class: "card", style: "margin-bottom: 8px; cursor: pointer",
-          onclick: () => { document.getElementById("modal-root").replaceChildren(); location.hash = `#/p/${pid}/c/${cid}/m/${p.id}`; },
+          onclick: () => { closeModal(false); location.hash = `#/p/${pid}/c/${cid}/m/${p.id}`; },
         },
-          el("div", { class: "small muted" }, `${p.author} · ${fmtTime(p.created_at)}`),
+          el("div", { class: "small muted" }, `${p.author} · `, el("span", {class:"mono"}, fmtTime(p.created_at))),
           el("div", {}, (p.body || "(attachment)").slice(0, 160)))))
       : el("div", { class: "empty" }, el("div", { class: "glyph" }, "⌖"),
-          el("div", { class: "e-title" }, "Nothing Pinned"),
+          el("div", { class: "e-title" }, "Nothing pinned"),
           el("p", {}, "Pin a message from its hover toolbar.")),
   });
 }
@@ -845,14 +855,14 @@ function showMembers(conv) {
   if (!conv) return;
   const members = conv.members || [];
   modal({
-    title: "MEMBERS",
+    title: "Members",
     confirmText: "Close",
     body: el("div", {}, ...members.map((mm) => {
       const agent = AC.agentByAlias(mm.alias);
       return el("div", { style: "display:flex;align-items:center;gap:8px;padding:4px 0" },
         AC.avatarEl(mm.alias, 20),
         el("span", {}, mm.alias),
-        mm.role === "admin" ? el("span", { class: "role-tag admin" }, "admin") : null,
+        mm.role === "admin" ? el("span", { class: "role-tag admin" }, "Admin") : null,
         agent ? el("span", { class: "presence " + (agent.online ? "online" : "away"), style: "position:static" }) : null);
     })),
   });
@@ -876,7 +886,7 @@ function showProfilePopover(evt, alias) {
     el("div", { class: "pp-head" },
       AC.avatarEl(alias, 64),
       el("div", {},
-        el("div", { class: "pp-alias" }, alias, isAdmin ? el("span", { class: "role-tag admin", style: "margin-left:6px" }, "admin") : null),
+        el("div", { class: "pp-alias" }, alias, isAdmin ? el("span", { class: "role-tag admin", style: "margin-left:6px" }, "Admin") : null),
         el("div", { class: "pp-role" }, isAdmin ? "human administrator" : (agent && agent.role) || "agent"))),
     agent && (agent.status_emoji || agent.status_text)
       ? el("div", { class: "pp-status" }, AC.emoji(agent.status_emoji) || "", " ", agent.status_text || "")
@@ -969,7 +979,7 @@ function buildComposer(opts) {
   const tray = el("div", { class: "att-tray" });
   const ta = el("textarea", { placeholder: opts.placeholder || "Message" });
   const decisionToggle = opts.allowDecision
-    ? el("input", { type: "checkbox", title: "Post as Decision" }) : null;
+    ? el("input", { type: "checkbox", title: "Post As Decision" }) : null;
 
   try { ta.value = localStorage.getItem(opts.draftKey) || ""; } catch (e) {}
   const saveDraft = debounce(() => {
@@ -1207,7 +1217,7 @@ Views.activity = async function () {
   page.append(list);
   AC.setView(page);
   let beforeId = null;
-  const loadMore = el("button", { class: "btn small", style: "margin-top: 12px" }, "Load more");
+  const loadMore = el("button", { class: "btn small", style: "margin-top: 12px" }, "Load More");
   async function load() {
     const data = await API.activity(pid, { limit: 60, before_id: beforeId });
     for (const ev of data.items || []) {
@@ -1253,14 +1263,15 @@ Views.mentions = async function () {
         class: "card" + (m.seen ? "" : " unread"), style: "margin-bottom: 8px" + (target ? ";cursor:pointer" : ""),
         onclick: () => { if (target) location.hash = target; },
       },
-        el("div", { class: "small muted mono" },
-          `${(msg && msg.author) || (comment && comment.author) || "?"} · ${fmtTime(m.mentioned_at)}`
-          + (comment ? ` · ticket #${comment.ticket_number}` : "")
-          + (m.seen ? "" : " · UNSEEN")),
+        el("div", { class: "small muted" },
+          `${(msg && msg.author) || (comment && comment.author) || "?"} · `,
+          el("span", {class:"mono"}, fmtTime(m.mentioned_at)),
+          comment ? el("span", {class:"mono"}, ` · ticket #${comment.ticket_number}`) : null,
+          m.seen ? "" : " · Unseen"),
         el("div", {}, ((msg && msg.body) || (comment && comment.body) || "").slice(0, 220)));
     })) : el("div", { class: "empty" }, el("div", { class: "glyph" }, "@"),
-      el("div", { class: "e-title" }, "No Mentions"),
-      el("p", {}, "When someone mentions you, it lands here.")));
+      el("div", { class: "e-title" }, "No mentions"),
+      el("p", {}, "When someone mentions you, it lands here."), el("a", {class:"btn", href:`#/p/${pid}/chat`}, Icons.chat(), "Open Chat")));
   AC.setView(page);
 };
 
@@ -1272,8 +1283,8 @@ Views.saved = async function () {
   const page = el("div", { class: "page" },
     el("h1", { class: "page-title" }, "Saved"),
     items.length ? el("div", {}, ...items.map((m) => el("div", { class: "card", style: "margin-bottom: 8px" },
-      el("div", { class: "small muted mono", style: "margin-bottom: 4px" },
-        `${m.author} · ${fmtTime(m.created_at)}`),
+      el("div", { class: "small muted", style: "margin-bottom: 4px" },
+        `${m.author} · `, el("span", {class:"mono"}, fmtTime(m.created_at))),
       m.deleted ? el("em", { class: "faint" }, "This message was deleted.") : renderMd(m.body),
       el("div", { style: "display:flex;gap:8px;margin-top:8px" },
         el("button", { class: "btn small", onclick: () => { location.hash = `#/p/${pid}/c/${m.conversation_id}/m/${m.id}`; } }, "Jump"),
@@ -1284,8 +1295,8 @@ Views.saved = async function () {
           },
         }, "Unsave")))))
       : el("div", { class: "empty" }, el("div", { class: "glyph" }, "⚑"),
-          el("div", { class: "e-title" }, "Nothing Saved"),
-          el("p", {}, "Flag messages from their hover toolbar to keep them here.")));
+          el("div", { class: "e-title" }, "Nothing saved"),
+          el("p", {}, "Flag messages from their hover toolbar to keep them here."), el("a", {class:"btn", href:`#/p/${pid}/chat`}, Icons.chat(), "Open Chat")));
   AC.setView(page);
 };
 
@@ -1304,12 +1315,12 @@ Views.pins = async function () {
         class: "card", style: "margin-bottom: 8px; cursor: pointer",
         onclick: () => { location.hash = `#/p/${pid}/c/${c.id}/m/${p.id}`; },
       },
-        el("div", { class: "small muted mono" }, `${p.author} · ${fmtTime(p.created_at)}`),
+        el("div", { class: "small muted" }, `${p.author} · `, el("span", {class:"mono"}, fmtTime(p.created_at))),
         el("div", {}, (p.body || "(attachment)").slice(0, 200)))));
   }
   if (!any) page.append(el("div", { class: "empty" }, el("div", { class: "glyph" }, "⌖"),
-    el("div", { class: "e-title" }, "Nothing Pinned"),
-    el("p", {}, "Pins from every channel collect here.")));
+    el("div", { class: "e-title" }, "Nothing pinned"),
+    el("p", {}, "Pins from every channel collect here."), el("a", {class:"btn", href:`#/p/${pid}/chat`}, Icons.chat(), "Open Chat")));
   AC.setView(page);
 };
 
@@ -1327,15 +1338,15 @@ Views.decisions = async function () {
       el("span", { class: "m-av" }, AC.avatarEl({ alias: m.author, avatar: m.avatar }, 36)),
       el("div", { class: "m-head" },
         el("span", { class: "m-author" }, m.author),
-        el("span", { class: "role-tag decision" }, "decision"),
+        el("span", { class: "role-tag decision" }, "Decision"),
         el("span", { class: "m-time" }, fmtTime(m.created_at))),
       el("div", { class: "m-body" }, renderMd(m.body),
         el("button", {
           class: "btn small", style: "margin-top: 8px",
           onclick: () => { location.hash = `#/p/${pid}/c/${m.conversation_id}/m/${m.id}`; },
-        }, "Jump to context")))))
+        }, "Jump to Context")))))
       : el("div", { class: "empty" }, el("div", { class: "glyph" }, "◆"),
-          el("div", { class: "e-title" }, "No Decisions Recorded"),
-          el("p", {}, "Agents post decision-type messages to record agreed outcomes.")));
+          el("div", { class: "e-title" }, "No decisions recorded"),
+          el("p", {}, "Agents post decision-type messages to record agreed outcomes."), el("a", {class:"btn", href:`#/p/${pid}/chat`}, Icons.chat(), "Open Chat")));
   AC.setView(page);
 };

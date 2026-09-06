@@ -63,12 +63,12 @@ Views.setup = async function () {
 
   AC.setView(el("div", { class: "setup-wrap" },
     el("div", { class: "card" },
-      el("h1", {}, "nomos"),
+      el("h1", {}, "Nomos"),
       el("div", { class: "sub" },
         "One-time setup: choose the alias and mark your agents will see when you speak. No login — this machine is the admin console."),
-      el("div", { class: "field" }, el("label", {}, "Your Alias"), aliasInput),
-      el("div", { class: "field" }, el("label", {}, "Display Color"), swatches),
-      el("div", { class: "field" }, el("label", {}, "Your Mark"), grid),
+      el("div", { class: "field" }, el("label", {}, "Your alias"), aliasInput),
+      el("div", { class: "field" }, el("label", {}, "Display color"), swatches),
+      el("div", { class: "field" }, el("label", {}, "Your mark"), grid),
       el("button", { class: "btn primary", style: "width:100%", onclick: submit }, "Create Admin Identity"))));
 };
 
@@ -80,11 +80,12 @@ Views.dashboard = async function () {
   const page = el("div", { class: "page" },
     el("div", { class: "spread" },
       el("h1", {}, "Projects"),
-      el("button", { class: "btn primary", onclick: Views._createProjectModal }, "+ New Project")),
+      el("button", { class: "btn primary", onclick: Views._createProjectModal }, "Create Project")),
     AC.state.projects.length ? grid : el("div", { class: "empty" },
       el("div", { class: "glyph" }, "⌀"),
-      el("div", { class: "e-title" }, "No Projects Yet"),
-      el("p", {}, "Create the first project; agents join it through the API.")));
+      el("div", { class: "e-title" }, "No projects yet"),
+      el("p", {}, "Create a project to start collaborating."),
+      el("button", {class:"btn", onclick:Views._createProjectModal}, "Create Project")));
   AC.setView(page);
 
   for (const p of AC.state.projects) {
@@ -112,7 +113,7 @@ Views.dashboard = async function () {
           el("span", { class: "stat" }, el("b", {}, String(c.tickets ?? "?")), " tickets"),
           el("span", { class: "stat" }, el("b", {}, String(c.documents ?? "?")), " docs"),
           online ? el("span", { class: "stat-pill online" }, `${online} online`) : null,
-          nAwait ? el("span", { class: "stat-pill awaiting", title: "Tickets Awaiting Your Input" }, `${nAwait} awaiting you`) : null,
+          nAwait ? el("span", { class: "stat-pill awaiting", "data-attention-key":`project:${p.id}`, title: "Tickets awaiting your input" }, `${nAwait} awaiting you`) : null,
         ].filter(Boolean));
       } catch (e) { /* card stays basic */ }
     })();
@@ -135,7 +136,7 @@ Views.dashboard = async function () {
     actBody.classList.remove("faint");
     actBody.replaceChildren(...lines.slice(0, 15).map(({ p, ev }) =>
       el("div", { class: "activity-line" },
-        el("span", { class: "t-chrome faint" }, fmtTime(ev.created_at)),
+        el("span", { class: "t-chrome faint mono" }, fmtTime(ev.created_at)),
         el("a", { href: `#/p/${p.id}` }, p.name),
         el("span", { class: "muted" }, describeEvent(ev)))));
   })();
@@ -207,21 +208,21 @@ Views._createProjectModal = async function () {
   const desc = el("textarea", { rows: 3, placeholder: "Description (optional)" });
   const wdir = el("input", { type: "text", placeholder: "/absolute/path/to/working/directory (optional)", maxlength: 1024 });
   const wd = dirField(wdir);
-  const okd = await modal({
-    title: "New Project",
-    body: el("div", {}, el("div", { class: "field" }, el("label", {}, "Name"), name),
-      el("div", { class: "field" }, el("label", {}, "Description"), desc),
-      el("div", { class: "field" }, el("label", {}, "Working Directory"), wd.row, wd.panel,
-        el("div", { class: "hint" }, "AGENTS.md is copied there and agents discover it from the project."))),
-    confirmText: "Create",
-    onValidate: () => name.value.trim().length > 0,
+  await modal({
+    title:"Create Project", icon:"workspaces", confirmText:"Create Project",
+    isDirty:() => !!(name.value || desc.value || wdir.value),
+    body:el("div", {},
+      el("div", {class:"field"}, el("label", {}, "Name"), name),
+      el("div", {class:"field"}, el("label", {}, "Description"), desc),
+      el("div", {class:"field"}, el("label", {}, "Working directory"), wd.row, wd.panel,
+        el("div", {class:"hint"}, "Agents discover this directory when they join the project."))),
+    onValidate:() => !!name.value.trim(),
+    onConfirm:async () => {
+      const p = await API.createProject(name.value.trim(), desc.value.trim(), wdir.value.trim());
+      toast("Project Created", p.name);
+      location.hash = `#/p/${p.id}`;
+    },
   });
-  if (!okd) return;
-  try {
-    const p = await API.createProject(name.value.trim(), desc.value.trim(), wdir.value.trim());
-    toast("Project Created", p.name);
-    location.hash = `#/p/${p.id}`;
-  } catch (e) { toast("Create Failed", e.message, "error"); }
 };
 
 /* ---------- agent management ---------- */
@@ -235,7 +236,7 @@ async function notesModal(pid, a) {
       const todoRows = (n.todos || []).map((t) => el("tr", {},
         el("td", {}, t.text),
         el("td", {}, el("span", { class: statusClass(t.status) }, t.status)),
-        el("td", { class: "t-chrome " + (t.priority === "high" ? "" : "faint") }, t.priority)));
+        el("td", { class: "t-chrome " + (t.priority === "high" ? "" : "faint") }, chromeValue(t.priority))));
       body.replaceChildren(...[
         el("div", { class: "t-micro" }, "Todo List"),
         (n.todos || []).length
@@ -263,7 +264,7 @@ async function notesModal(pid, a) {
    `load` returns [{label parts..., hash}] entries. */
 async function drilldownModal(title, load) {
   const body = el("div", { class: "drill-list" }, el("div", { class: "faint" }, "loading…"));
-  const closeAll = () => document.getElementById("modal-root").replaceChildren();
+  const closeAll = () => closeModal(false);
   (async () => {
     try {
       const entries = await load();
@@ -289,7 +290,7 @@ Views.agentsAdmin = async function () {
         AC.avatarEl(a, 36),
         el("span", {},
           el("div", { class: "t-emphasis" }, a.alias),
-          el("div", { class: "t-chrome faint" }, a.role || "—")))),
+          el("div", { class: "muted" }, a.role || "—")))),
       el("td", {}, a.status_text || a.status_emoji
         ? el("span", { class: "muted small" },
             a.status_emoji ? AC.emoji(a.status_emoji) + " " : "", a.status_text || "")
@@ -299,7 +300,7 @@ Views.agentsAdmin = async function () {
           : online ? el("span", { class: "stat-pill online" }, "online")
           : el("span", { class: "stat-pill" }, a.status || "idle"),
         a.admin_mentions_unseen > 0
-          ? el("span", { class: "mention-chip", title: "This agent has not read your @mention yet" },
+          ? el("span", { class: "mention-chip", "data-attention-key":`agent:${pid}:${a.id}`, title: "This agent has not read your @mention yet" },
               `${a.admin_mentions_unseen} unread from you`)
           : a.mentions_unseen > 0
             ? el("span", { class: "mention-chip quiet", title: "Unread teammate mentions" },
@@ -329,7 +330,7 @@ Views.agentsAdmin = async function () {
                   entries.push({
                     hash: `#/p/${pid}/tickets/${t.number}`,
                     cells: [
-                      el("span", { class: "t-chrome faint" }, `#${t.number}`),
+                      el("span", { class: "t-chrome faint mono" }, `#${t.number}`),
                       el("span", { class: "drill-title" }, t.title),
                       el("span", { class: statusClass(t.status) }, t.status),
                       el("span", { class: "t-chrome faint" }, tag),
@@ -347,7 +348,7 @@ Views.agentsAdmin = async function () {
               return (docs.items || []).map((d) => ({
                 hash: `#/p/${pid}/docs/${encodeURIComponent(d.slug)}`,
                 cells: [
-                  el("span", { class: "t-micro", style: "flex:none" }, "MD"),
+                  el("span", { class: "t-micro", style: "flex:none" }, "md"),
                   el("span", { class: "drill-title" }, d.title),
                   el("span", { class: "t-chrome faint" }, `rev ${d.current_revision}`),
                 ],
@@ -380,12 +381,12 @@ Views.agentsAdmin = async function () {
     el("h1", {}, "Agents"),
     el("div", { class: "card scroll-x", style: "padding:0" },
       agents.length ? el("table", { class: "agents-table" },
-        el("thead", {}, el("tr", {}, ...["Agent", "Status", "Presence", "Last seen", "Joined", ""].map((h) => el("th", {}, h)))),
+        el("thead", {}, el("tr", {}, ...["Agent", "Status", "Presence", "Last Seen", "Joined", ""].map((h) => el("th", {}, h)))),
         el("tbody", {}, rows))
         : el("div", { class: "empty" },
             el("div", { class: "glyph" }, "⌀"),
-            el("div", { class: "e-title" }, "No Agents Yet"),
-            el("p", {}, `Agents join via POST /api/projects/${pid}/agents/join — see /api/docs.`))),
+            el("div", { class: "e-title" }, "No agents yet"),
+            el("p", {}, "Invite an agent using the project joining instructions."), el("a", {class:"btn", href:"/api/docs", target:"_blank", rel:"noopener"}, Icons.docs(), "Open Joining Reference"))),
     agents.length ? el("p", { class: "hint" },
       "Agents join via POST /api/projects/" + pid + "/agents/join — see /api/docs.") : null));
   AC.on("agent_joined", () => Views.agentsAdmin(), "agents");
@@ -480,15 +481,15 @@ Views.settings = async function () {
       el("div", { class: "field" }, el("label", {}, "Name"), name),
       el("div", { class: "field" }, el("label", {}, "Description"), desc),
       el("div", { class: "field" }, el("label", {}, "Ticket statuses (comma-separated, order = workflow)"), statuses),
-      el("div", { class: "field" }, el("label", {}, "Working Directory"), swd.row, swd.panel),
+      el("div", { class: "field" }, el("label", {}, "Working directory"), swd.row, swd.panel),
       el("label", { class: "checkline" }, sysMsgs, " Post system messages to #general on ticket/agent events"),
       el("button", { class: "btn primary", onclick: save }, "Save Settings")),
     el("div", { class: "card" },
       el("div", { class: "rail-title" }, "Your Identity"),
       el("div", { class: "field" }, el("label", {}, "Alias"), idAlias),
-      el("div", { class: "field" }, el("label", {}, "Display Color"), idSwatches),
+      el("div", { class: "field" }, el("label", {}, "Display color"), idSwatches),
       el("div", { class: "field" }, el("label", {}, "Mark"), idGridBox),
-      el("button", { class: "btn primary", onclick: saveIdentity }, "Update identity")),
+      el("button", { class: "btn primary", onclick: saveIdentity }, "Update Identity")),
     el("div", { class: "card" },
       el("div", { class: "rail-title" }, "Data"),
       el("div", { class: "row" }, exportBtn)),
@@ -501,9 +502,10 @@ Views.settings = async function () {
               catch (e) { toast("Error", e.message, "error"); }
             } }, "Unarchive Project")
           : el("button", { class: "btn", onclick: async () => {
-              try { await API.archiveProject(pid); toast("Archived", p.name + " is now read-only."); AC.state.project = await API.project(pid); Views.settings(); }
+              if (!await modal({title:"Archive Project?", confirmText:"Archive Project", danger:true, body:el("p", {}, p.name + " will become read-only. You can unarchive it later.")})) return;
+              try { await API.archiveProject(pid); toast("Project Archived", p.name + " is now read-only."); AC.state.project = await API.project(pid); Views.settings(); }
               catch (e) { toast("Error", e.message, "error"); }
-            } }, "Archive Project (Read-Only)"),
+            } }, "Archive Project"),
         el("button", {
           class: "btn danger",
           onclick: async () => {
@@ -511,9 +513,9 @@ Views.settings = async function () {
             const okd = await modal({
               title: "Delete Project Permanently?",
               body: el("div", {},
-                el("p", { class: "muted" }, "This deletes ALL channels, messages, DMs, tickets, documents, attachments, and agent keys for this project. It cannot be undone."),
+                el("p", { class: "muted" }, "This deletes all channels, messages, DMs, tickets, documents, attachments, and agent keys for this project. It cannot be undone."),
                 el("div", { class: "field" }, el("label", {}, `Type the project name (${p.name}) to confirm`), confirmInput)),
-              confirmText: "Delete Everything", danger: true,
+              confirmText: "Delete Project", danger: true,
               onValidate: () => confirmInput.value === p.name,
             });
             if (!okd) return;
@@ -523,5 +525,5 @@ Views.settings = async function () {
               location.hash = "#/";
             } catch (e) { toast("Delete Failed", e.message, "error"); }
           },
-        }, "Delete Project…")))));
+        }, "Delete Project")))));
 };

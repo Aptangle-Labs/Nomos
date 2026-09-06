@@ -20,7 +20,7 @@ Views.board = async function () {
     const colEl = el("div", { class: "kanban-col" },
       el("div", { class: "col-head" },
         el("span", {}, col.name),
-        el("span", { class: "faint" }, (col.statuses || []).join(" · ")),
+        el("span", { class: "faint" }, (col.statuses || []).map(chromeValue).join(" · ")),
         el("span", { class: "cnt" }, String((col.cards || []).length))),
       body);
     colEl.addEventListener("dragover", (e) => { e.preventDefault(); colEl.classList.add("dragover"); });
@@ -37,6 +37,9 @@ Views.board = async function () {
       } catch (err) { toast("Move Failed", err.message, "error"); }
     });
     for (const t of col.cards || []) body.append(kanbanCard(t));
+    if (!(col.cards || []).length) body.append(el("div", {class:"col-empty"},
+      el("p", {class:"muted"}, "No tickets in " + col.name + "."),
+      el("button", {class:"btn small", onclick:() => Views.ticketNew()}, "Create Ticket")));
     wrap.append(colEl);
   }
 
@@ -45,8 +48,8 @@ Views.board = async function () {
       el("div", { class: "knum" }, "#" + t.number),
       el("div", { class: "t-emphasis" }, t.title),
       el("div", { class: "krow" },
-        el("span", { class: statusClass(t.status) }, t.status),
-        el("span", { class: "t-micro prio-" + (t.priority || "medium") }, t.priority),
+        el("span", { class: statusClass(t.status), "data-attention-key":t.status === "awaiting-human" ? `ticket:${pid}:${t.number}` : null }, t.status),
+        el("span", { class: "t-chrome prio-" + (t.priority || "medium") }, chromeValue(t.priority)),
         assigneeChip(t.assignee)),
       el("div", { class: "t-chrome faint kage" }, `in ${t.status} · ${timeAgo(t.updated_at)}`));
     card.addEventListener("dragstart", (e) => {
@@ -54,7 +57,7 @@ Views.board = async function () {
       card.classList.add("dragging");
     });
     card.addEventListener("dragend", () => card.classList.remove("dragging"));
-    return card;
+    return Motion.once(card, `ticket:${pid}:${t.number}`);
   }
 
   const refresh = debounce(() => { if (location.hash.includes("/board")) Views.board(); }, 400);
@@ -81,26 +84,28 @@ Views.tickets = async function () {
         ? el("div", {}, items.map((t) => ticketRow(t)))
         : el("div", { class: "empty" },
             el("div", { class: "glyph" }, "⌀"),
-            el("div", { class: "e-title" }, "No Tickets Match"),
-            el("p", {}, "Adjust the filters, or create a ticket.")));
+            el("div", { class: "e-title" }, "No tickets match"),
+            el("p", {}, "Adjust the filters, or create a ticket."),
+            el("button", {class:"btn", onclick:() => Views.ticketNew()}, "Create Ticket")));
     } catch (e) { listBox.replaceChildren(el("div", { class: "empty" }, el("p", {}, e.message))); }
   };
 
   function ticketRow(t) {
-    return el("div", { class: "trow" + (t.status === "awaiting-human" ? " awaiting" : ""), onclick: () => location.hash = `#/p/${pid}/tickets/${t.number}` },
+    const row = Motion.once(el("div", { "data-ticket":t.number, class: "trow" + (t.status === "awaiting-human" ? " awaiting" : ""), onclick: () => location.hash = `#/p/${pid}/tickets/${t.number}` },
       el("span", { class: "tnum" }, "#" + t.number),
       el("span", { class: "ttitle" }, t.title),
       ...(t.labels || []).slice(0, 3).map((l) => el("span", { class: "label-chip" }, l)),
-      el("span", { class: "t-micro prio-" + (t.priority || "medium") }, t.priority),
-      el("span", { class: statusClass(t.status) }, t.status),
-      t.assignee ? assigneeChip(t.assignee) : el("span", { class: "t-chrome faint" }, "unassigned"));
+      el("span", { class: "t-chrome prio-" + (t.priority || "medium") }, chromeValue(t.priority)),
+      el("span", { class: statusClass(t.status), "data-attention-key":t.status === "awaiting-human" ? `ticket:${pid}:${t.number}` : null }, t.status),
+      t.assignee ? assigneeChip(t.assignee) : el("span", { class: "t-chrome faint" }, "Unassigned")), `ticket:${pid}:${t.number}`);
+    return row;
   }
 
-  const statusSel = el("select", {}, el("option", { value: "" }, "Any Status"),
-    AC.state.statuses.map((s) => el("option", { value: s }, s)));
-  const prioSel = el("select", {}, el("option", { value: "" }, "Any Priority"),
-    ["low", "medium", "high", "urgent"].map((p) => el("option", { value: p }, p)));
-  const assigneeSel = el("select", {}, el("option", { value: "" }, "Any Assignee"),
+  const statusSel = el("select", {}, el("option", { value: "" }, "Any status"),
+    AC.state.statuses.map((s) => el("option", { value: s }, chromeValue(s))));
+  const prioSel = el("select", {}, el("option", { value: "" }, "Any priority"),
+    ["low", "medium", "high", "urgent"].map((p) => el("option", { value: p }, chromeValue(p))));
+  const assigneeSel = el("select", {}, el("option", { value: "" }, "Any assignee"),
     el("option", { value: AC.state.adminAlias }, AC.state.adminAlias + " (admin)"),
     AC.state.agents.map((a) => el("option", { value: a.alias }, a.alias)));
   const qInput = el("input", { type: "text", placeholder: "filter text…" });
@@ -112,7 +117,7 @@ Views.tickets = async function () {
   AC.setView(el("div", { class: "page narrow" },
     el("div", { class: "spread" },
       el("h1", {}, "Tickets"),
-      el("button", { class: "btn primary", onclick: () => location.hash = `#/p/${pid}/tickets/new` }, "+ New Ticket")),
+      el("button", { class: "btn primary", onclick: () => Views.ticketNew() }, "Create Ticket")),
     el("div", { class: "filter-bar" }, statusSel, prioSel, assigneeSel, qInput),
     listBox));
   await load();
@@ -127,36 +132,31 @@ Views.ticketNew = async function () {
   const title = el("input", { type: "text", maxlength: 200, placeholder: "Short summary" });
   const desc = el("textarea", { rows: 8, placeholder: "Markdown description…" });
   const prio = el("select", {}, ["low", "medium", "high", "urgent"].map((p) =>
-    el("option", { value: p, selected: p === "medium" }, p)));
+    el("option", { value: p, selected: p === "medium" }, chromeValue(p))));
   const labels = el("input", { type: "text", placeholder: "labels, comma-separated" });
-  const assignee = el("select", {}, el("option", { value: "" }, "unassigned"),
+  const assignee = el("select", {}, el("option", { value: "" }, "Unassigned"),
     el("option", { value: AC.state.adminAlias }, AC.state.adminAlias + " (admin)"),
     AC.state.agents.filter((a) => !a.revoked).map((a) => el("option", { value: a.alias }, a.alias)));
-  AC.setView(el("div", { class: "page narrow" },
-    el("h1", {}, "New Ticket"),
-    el("div", { class: "card" },
-      el("div", { class: "field" }, el("label", {}, "Title"), title),
-      el("div", { class: "field" }, el("label", {}, "Description (markdown)"), desc),
-      el("div", { class: "row", style: "gap:16px;align-items:flex-start" },
-        el("div", { class: "field", style: "flex:1" }, el("label", {}, "Priority"), prio),
-        el("div", { class: "field", style: "flex:1" }, el("label", {}, "Assignee"), assignee),
-        el("div", { class: "field", style: "flex:2" }, el("label", {}, "Labels"), labels)),
-      el("div", { class: "row" },
-        el("button", {
-          class: "btn primary", onclick: async () => {
-            if (!title.value.trim()) { toast("Ticket", "Title is required.", "warn"); return; }
-            try {
-              const t = await API.createTicket(pid, {
-                title: title.value.trim(), description: desc.value,
-                priority: prio.value, assignee: assignee.value || undefined,
-                labels: labels.value.split(",").map((s) => s.trim()).filter(Boolean),
-              });
-              toast("Created", `#${t.number} ${t.title}`);
-              location.hash = `#/p/${pid}/tickets/${t.number}`;
-            } catch (e) { toast("Create Failed", e.message, "error"); }
-          },
-        }, "Create Ticket"),
-        el("button", { class: "btn", onclick: () => history.back() }, "Cancel")))));
+  await modal({
+    title: "Create Ticket", icon: "ticket", confirmText: "Create Ticket",
+    isDirty: () => !!(title.value || desc.value || labels.value || assignee.value || prio.value !== "medium"),
+    body: el("div", {},
+      el("div", {class:"field"}, el("label", {}, "Title"), title),
+      el("div", {class:"field"}, el("label", {}, "Description (markdown)"), desc),
+      el("div", {class:"field"}, el("label", {}, "Priority"), prio),
+      el("div", {class:"field"}, el("label", {}, "Assignee"), assignee),
+      el("div", {class:"field"}, el("label", {}, "Labels"), labels)),
+    onValidate: () => !!title.value.trim(),
+    onConfirm: async () => {
+      const ticket = await API.createTicket(pid, {
+        title:title.value.trim(), description:desc.value, priority:prio.value,
+        assignee:assignee.value || undefined,
+        labels:labels.value.split(",").map(s => s.trim()).filter(Boolean),
+      });
+      toast("Ticket Created", "#" + ticket.number + " " + ticket.title);
+      location.hash = `#/p/${pid}/tickets/${ticket.number}`;
+    },
+  });
 };
 
 /* ---------- ticket detail ---------- */
@@ -168,12 +168,12 @@ Views.ticketDetail = async function (n) {
   catch (e) { toast("Not Found", e.message, "warn"); location.hash = `#/p/${pid}/tickets`; return; }
 
   const statusSel = el("select", {}, AC.state.statuses.map((s) =>
-    el("option", { value: s, selected: s === t.status }, s)));
+    el("option", { value: s, selected: s === t.status }, chromeValue(s))));
   statusSel.onchange = async () => {
     try { await API.updateTicket(pid, n, { status: statusSel.value, expected_revision: t.revision }); toast("Status", `#${n} → ${statusSel.value}`); }
     catch (e) { toast("Error", e.message, "error"); Views.ticketDetail(n); }
   };
-  const assigneeSel = el("select", {}, el("option", { value: "" }, "unassigned"),
+  const assigneeSel = el("select", {}, el("option", { value: "" }, "Unassigned"),
     el("option", { value: AC.state.adminAlias, selected: t.assignee === AC.state.adminAlias }, AC.state.adminAlias + " (admin)"),
     AC.state.agents.map((a) => el("option", { value: a.alias, selected: t.assignee === a.alias }, a.alias)));
   assigneeSel.onchange = async () => {
@@ -186,14 +186,14 @@ Views.ticketDetail = async function (n) {
 
   const page = el("div", { class: "page narrow" },
     el("div", { class: "row", style: "gap:12px;margin-bottom:16px" },
-      el("a", { href: `#/p/${pid}/tickets`, class: "muted" }, "← tickets"),
+      el("a", { href: `#/p/${pid}/tickets`, class: "muted" }, "← Tickets"),
       el("span", { class: "t-display", style: "margin:0" }, `#${t.number} ${t.title}`),
-      t.status === "awaiting-human" ? el("span", { class: "stat-pill awaiting" }, "needs your input") : null),
+      t.status === "awaiting-human" ? el("span", { class: "stat-pill awaiting" }, "Needs your input") : null),
     el("div", { class: "card" },
       el("div", { class: "ticket-meta" },
         el("span", { class: "k" }, "Status"), el("div", {}, statusSel),
         el("span", { class: "k" }, "Assignee"), el("div", {}, assigneeSel),
-        el("span", { class: "k" }, "Priority"), el("div", {}, el("span", { class: "t-micro prio-" + (t.priority || "medium") }, t.priority)),
+        el("span", { class: "k" }, "Priority"), el("div", {}, el("span", { class: "t-chrome prio-" + (t.priority || "medium") }, chromeValue(t.priority))),
         el("span", { class: "k" }, "Labels"), el("div", {}, (t.labels || []).length ? (t.labels || []).map((l) => el("span", { class: "label-chip", style: "margin-right:4px" }, l)) : el("span", { class: "faint" }, "none")),
         el("span", { class: "k" }, "Reporter"), el("div", { class: "row" }, AC.avatarEl(t.reporter, 16), t.reporter),
         el("span", { class: "k" }, "Created"), el("div", { class: "muted small" }, fmtTime(t.created_at) + " · updated " + timeAgo(t.updated_at))),
@@ -206,6 +206,15 @@ Views.ticketDetail = async function (n) {
     el("div", { class: "card" },
       el("div", { class: "rail-title" }, "Mentioned in"),
       backlinksBox));
+  if (AC.state.adminAlias) page.append(el("div", {class:"card"},
+    el("h2", {}, "Delete Ticket"),
+    el("p", {class:"muted"}, "Permanently delete this ticket and its comments."),
+    el("button", {class:"btn danger", onclick:async () => {
+      if (!await modal({title:"Delete Ticket #" + n + "?", danger:true, confirmText:"Delete Ticket",
+        body:el("p", {}, "This permanently deletes " + t.title + " and its comments. This cannot be undone.")})) return;
+      try { await API.deleteTicket(pid, n); toast("Ticket Deleted", "#" + n); location.hash = `#/p/${pid}/tickets`; }
+      catch (e) { toast("Delete Ticket Failed", e.message, "error"); }
+    }}, "Delete Ticket")));
   page.append(await Collaboration.ticketControls(pid, t));
   page.append(await Collaboration.evidenceControls(pid, t));
   if (location.hash !== collaborationRoute) return;
@@ -224,7 +233,7 @@ Views.ticketDetail = async function (n) {
               el("div", { class: "c-row" },
                 AC.avatarEl(c.author || c.author_alias, 20),
                 el("span", { class: "m-author" }, c.author || c.author_alias),
-                role === "admin" ? el("span", { class: "role-tag admin" }, "admin") : null,
+                role === "admin" ? el("span", { class: "role-tag admin" }, "Admin") : null,
                 el("span", { class: "m-time" }, fmtTime(c.created_at))),
               renderMd(c.body));
           }))

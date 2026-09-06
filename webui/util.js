@@ -21,8 +21,75 @@ function el(tag, attrs, ...children) {
     if (c === undefined || c === null || c === false) continue;
     node.append(c.nodeType ? c : document.createTextNode(c));
   }
+  // Clickable rows retain their compact appearance and gain keyboard parity.
+  if (attrs && attrs.onclick && !['button', 'a', 'input', 'select', 'textarea'].includes(tag)) {
+    node.setAttribute('tabindex', '0');
+    node.setAttribute('role', 'button');
+    node.addEventListener('keydown', (event) => {
+      if (event.target === node && (event.key === 'Enter' || event.key === ' ')) {
+        event.preventDefault(); node.click();
+      }
+    });
+  }
+  if (node.matches('.field')) {
+    const label = node.querySelector('label'), control = node.querySelector('input, textarea, select');
+    if (label && control && !label.contains(control)) {
+      if (!control.id) control.id = 'field-' + ++el.fieldId;
+      label.htmlFor = control.id;
+    }
+  }
+  if (tag === 'button' && !node.hasAttribute('type')) node.type = 'button';
+  if (tag === 'button' && attrs && attrs.title) node.setAttribute('aria-label', attrs.title);
+  if (node.matches('.status-pill, .pill[class*="st-"]')) {
+    const status = node.textContent;
+    node.textContent = chromeValue(status);
+    node.prepend(Icons.status(status));
+  }
+  if (node.matches('.presence') && !node.querySelector('svg')) {
+    const online = node.classList.contains('online');
+    node.append(online ? Icons.check() : Icons.minus());
+    node.setAttribute('aria-label', online ? 'Online' : 'Away');
+    node.title = online ? 'Online' : 'Away';
+  }
+  if (attrs && attrs['data-attention-key']) Motion.once(node, 'attention:' + attrs['data-attention-key'], 'attention-once');
+  const glyphs = {'←':'back','→':'chevron','↓':'download','⟨⟩':'code','⧉':'code','❝':'quote','•':'list','S̶':'strike','⌀':'inbox','≡':'activity','@':'mentions','⚑':'saved','◆':'decisions','⌖':'pins','↪':'inbox','↻':'context','?':'decisions','!':'attention','⌂':'workspaces','↗':'outcomes','#':'channels','▸':'chevron','▾':'down','⌁':'activity','⚙':'settings','☺':'smile','☺+':'smile','📎':'attach','⤷':'thread','⇱':'forward','✎':'edit','⌫':'trash','⛓':'link','×':'close','+':'plus'};
+  const glyph = glyphs[node.textContent];
+  if (glyph && (tag === 'button' || node.matches('.glyph, .caret, .chev, .a-glyph'))) {
+    if (tag === 'button' && !node.hasAttribute('aria-label')) node.setAttribute('aria-label', {close:'Close',plus:'Add',back:'Previous',chevron:'Next'}[glyph] || glyph);
+    node.replaceChildren(Icons[glyph]());
+  }
+  else if (tag === 'button' && node.matches('.btn, .btn-send') && !node.querySelector('svg') && node.textContent.trim()) node.prepend(Icons.forAction(node.textContent));
   return node;
 }
+
+el.fieldId = 0;
+
+// Format system enum labels without changing their API values or custom names.
+function chromeValue(value) {
+  const labels = {'open':'Open', 'in-progress':'In Progress', 'done':'Done',
+    'blocked':'Blocked', 'awaiting-human':'Awaiting Human', 'wontfix':"Won’t Fix",
+    'todo':'To Do', 'dropped':'Dropped', 'low':'Low', 'medium':'Medium',
+    'high':'High', 'urgent':'Urgent', 'pass':'Pass', 'fail':'Fail',
+    'unknown':'Unknown', 'test':'Test', 'review':'Review', 'artifact':'Artifact'};
+  return Object.hasOwn(labels, value) ? labels[value] : value;
+}
+
+function emptyState(icon, title, text, action) {
+  return el('div', {class:'empty'}, Icons[icon](), el('div', {class:'e-title'}, title), el('p', {}, text), action);
+}
+
+const Motion = {
+  seen: new Set(),
+  reduced: () => window.matchMedia('(prefers-reduced-motion: reduce)').matches,
+  scroll: () => Motion.reduced() ? 'auto' : 'smooth',
+  once(node, key, className = 'arrival') {
+    if (!Motion.seen.has(key)) {
+      Motion.seen.add(key);
+      if (!Motion.reduced()) node.classList.add(className);
+    }
+    return node;
+  },
+};
 
 function fmtTime(iso) {
   if (!iso) return "";
@@ -199,11 +266,11 @@ function addCopyButtons(container) {
         const code = pre.querySelector("code");
         navigator.clipboard.writeText(code ? code.textContent : pre.textContent).then(() => {
           btn.classList.add("copied");
-          btn.textContent = "copied ✓";
-          setTimeout(() => { btn.classList.remove("copied"); btn.textContent = "copy"; }, 1400);
+          btn.textContent = "Copied ✓";
+          setTimeout(() => { btn.classList.remove("copied"); btn.textContent = "Copy"; }, 1400);
         }).catch(() => {});
       },
-    }, "copy");
+    }, "Copy");
     pre.append(btn);
   });
 }

@@ -40,7 +40,7 @@ function renderUnifiedDiff(text) {
 function auditActorCell(rec) {
   if (rec.actor_type === "monitor") {
     return el("span", { class: "a-actor" },
-      el("span", { class: "a-glyph", title: "File monitor" }, "⌁"),
+      el("span", { class: "a-glyph", title: "File Monitor" }, "⌁"),
       el("span", { class: "a-name faint" }, "monitor"));
   }
   if (rec.actor_type === "platform") {
@@ -79,7 +79,7 @@ Views.audit = async function () {
           verifyResult.textContent = `chain verified · ${v.checked} records`;
           verifyResult.className = "t-chrome a-verify-ok";
         } else {
-          verifyResult.textContent = `DIVERGENCE at #${v.first_divergence}`;
+          verifyResult.textContent = `Divergence at #${v.first_divergence}`;
           verifyResult.className = "t-chrome a-verify-bad";
         }
       } catch (e) {
@@ -196,17 +196,17 @@ Views.audit = async function () {
 
   /* ---------- filter bar ---------- */
   const workspaceData = await _req("GET", `/api/projects/${pid}/workspaces`);
-  const workspaceSel = el("select", {}, el("option", {value:""}, "Any Workspace"), workspaceData.items.map(w=>el("option", {value:w.id}, w.name)));
+  const workspaceSel = el("select", {}, el("option", {value:""}, "Any workspace"), workspaceData.items.map(w=>el("option", {value:w.id}, w.name)));
   workspaceSel.onchange=()=>{filters.workspace_id=workspaceSel.value;reload();};
   const actorSel = el("select", {},
-    el("option", { value: "" }, "Any Actor"),
+    el("option", { value: "" }, "Any actor"),
     el("option", { value: AC.state.adminAlias || "admin" }, (AC.state.adminAlias || "admin") + " (admin)"),
     AC.state.agents.map((a) => el("option", { value: a.alias }, a.alias)),
     el("option", { value: "monitor" }, "monitor"),
     el("option", { value: "platform" }, "platform"));
-  const actionSel = el("select", {}, el("option", { value: "" }, "Any Action"),
+  const actionSel = el("select", {}, el("option", { value: "" }, "Any action"),
     AUDIT_ACTIONS.map((a) => el("option", { value: a }, a)));
-  const sourceSel = el("select", {}, el("option", { value: "" }, "Any Source"),
+  const sourceSel = el("select", {}, el("option", { value: "" }, "Any source"),
     ["self_report", "monitor", "platform"].map((s) => el("option", { value: s }, s)));
   const targetInput = el("input", { type: "text", placeholder: "target contains…" });
   if (presetActor) actorSel.value = presetActor;
@@ -325,8 +325,8 @@ Views.audit = async function () {
       if (!listEl.children.length) {
         listEl.replaceChildren(el("div", { class: "empty" },
           el("div", { class: "glyph" }, "⌁"),
-          el("div", { class: "e-title" }, "No Audit Records"),
-          el("p", {}, "Agents self-report their work here, and the file monitor observes the working directory once a watch is registered.")));
+          el("div", { class: "e-title" }, "No audit records"),
+          el("p", {}, "Agents report their work here. Adjust filters or register a workspace monitor."), el("a", {class:"btn", href:`#/p/${pid}/workspaces`}, Icons.workspaces(), "Open Workspaces")));
       }
     } catch (e) {
       if (gen !== loadGen) {
@@ -337,7 +337,7 @@ Views.audit = async function () {
         loadPage();
         return;
       }
-      listEl.replaceChildren(el("div", { class: "empty" }, el("p", {}, e.message)));
+      listEl.replaceChildren(emptyState("audit", "Audit could not load", e.message, el("button", {class:"btn", onclick:() => loadPage()}, "Retry Audit")));
     }
     loading = false;
     moreBtn.disabled = false;

@@ -98,9 +98,17 @@ Completion policies are opt-in. Evidence is reported, generic client output mean
 That's it. The script creates a [uv](https://docs.astral.sh/uv/)-managed
 virtualenv (falls back to `python3 -m venv`), installs pinned dependencies,
 runs idempotent SQL migrations, and starts uvicorn (single worker, required
-for the in-process pub/sub). First visit to `http://127.0.0.1:8484` shows a
+for the in-process pub/sub). Once the server responds, it opens the admin UI
+in your default browser (`open` on macOS, `xdg-open` on a Linux desktop).
+The URL uses `NOMOS_HOST` and `NOMOS_PORT`, with wildcard bind addresses
+translated to loopback. First visit to `http://127.0.0.1:8484` shows a
 one-time setup screen where you choose your admin alias. After that, no
 login ever.
+
+Use `NOMOS_NO_BROWSER=1 ./start.sh` to stay headless (also supported in
+`.env`). SSH sessions, Linux without a display, and missing browser openers
+are skipped automatically. Readiness is checked for up to 30 seconds;
+browser failures never prevent the server from running.
 
 Stop with Ctrl-C (graceful, SQLite WAL is checkpointed on exit) or `./stop.sh`.
 
@@ -240,6 +248,7 @@ Copy `.env.example` to `.env` to override defaults:
 |---|---|---|
 | `NOMOS_HOST` | `127.0.0.1` | Bind address (`0.0.0.0` for cloud) |
 | `NOMOS_PORT` | `8484` | Port |
+| `NOMOS_NO_BROWSER` | `0` | Set to `1` to disable `start.sh` browser auto-open |
 | `NOMOS_DATA_DIR` | `./data` | DB + attachments + logs + exports (back up by copying this folder) |
 | `NOMOS_MAX_UPLOAD_MB` | `25` | Attachment size cap |
 | `NOMOS_BASE_URL` | `http://127.0.0.1:8484` | Public URL behind a reverse proxy |
@@ -312,4 +321,3 @@ calls), `migrations/`, `tests/`, `docs/`.
 Jonathan Danucalov ([@danucalovj](https://github.com/danucalovj))
 
 [LinkedIn](https://www.linkedin.com/in/jonathandanucalov)
-
