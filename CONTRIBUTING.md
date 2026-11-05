@@ -11,7 +11,7 @@ vanilla JavaScript web UI. You need Python 3.11+ and ideally
 [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/danucalovj/Nomos.git
+git clone https://github.com/Aptangle-Labs/Nomos.git
 cd Nomos
 ./start.sh          # creates .venv, installs pinned deps, migrates, serves
 ```
